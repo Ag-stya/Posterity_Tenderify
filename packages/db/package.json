@@ -1,0 +1,27 @@
+{
+  "name": "@tenderwatch/db",
+  "version": "1.0.0",
+  "private": true,
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate": "prisma migrate deploy",
+    "migrate:dev": "prisma migrate dev",
+    "push": "prisma db push",
+    "seed": "tsx src/seed.ts",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.3.0",
+    "bcryptjs": "^2.4.3"
+  },
+  "devDependencies": {
+    "prisma": "^6.3.0",
+    "tsx": "^4.7.0",
+    "@types/bcryptjs": "^2.4.6",
+    "typescript": "^5.3.0"
+  }
+}

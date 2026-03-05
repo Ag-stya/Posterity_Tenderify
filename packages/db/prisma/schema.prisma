@@ -1,0 +1,125 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  BD
+}
+
+enum SiteType {
+  NIC_GEP
+  CPPP
+  NPROCURE
+  IREPS
+  CUSTOM_HTML
+}
+
+enum TenderStatus {
+  OPEN
+  CLOSED
+  UNKNOWN
+}
+
+enum CrawlStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(BD)
+  isActive     Boolean  @default(true)
+  refreshHash  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("users")
+}
+
+model SourceSite {
+  id                  String   @id @default(uuid()) @db.Uuid
+  key                 String   @unique
+  name                String
+  baseUrl             String
+  type                SiteType @default(CUSTOM_HTML)
+  enabled             Boolean  @default(false)
+  crawlIntervalMinutes Int     @default(10)
+  rateLimitPerMinute  Int      @default(30)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenders   Tender[]
+  crawlRuns CrawlRun[]
+
+  @@map("source_sites")
+}
+
+model Tender {
+  id             String       @id @default(uuid()) @db.Uuid
+  sourceSiteId   String       @db.Uuid
+  sourceUrl      String       @unique
+  sourceTenderId String?
+  title          String
+  organization   String?
+  summary        String?
+  location       String?
+  estimatedValue String?
+  publishedAt    DateTime?
+  deadlineAt     DateTime?
+  status         TenderStatus @default(UNKNOWN)
+  searchText     String
+  contentHash    String
+  fetchedAt      DateTime     @default(now())
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
+
+  canonicalOf TenderDuplicate[] @relation("canonical")
+  duplicateOf TenderDuplicate[] @relation("duplicate")
+
+  @@index([sourceSiteId, deadlineAt])
+  @@index([sourceSiteId, publishedAt])
+  @@map("tenders")
+}
+
+model TenderDuplicate {
+  id                 String @id @default(uuid()) @db.Uuid
+  canonicalTenderId  String @db.Uuid
+  duplicateTenderId  String @db.Uuid
+  reason             String?
+
+  canonical Tender @relation("canonical", fields: [canonicalTenderId], references: [id])
+  duplicate Tender @relation("duplicate", fields: [duplicateTenderId], references: [id])
+
+  @@unique([canonicalTenderId, duplicateTenderId])
+  @@map("tender_duplicates")
+}
+
+model CrawlRun {
+  id           String     @id @default(uuid()) @db.Uuid
+  sourceSiteId String     @db.Uuid
+  status       CrawlStatus @default(QUEUED)
+  startedAt    DateTime?
+  endedAt      DateTime?
+  itemsFound   Int        @default(0)
+  itemsNew     Int        @default(0)
+  itemsUpdated Int        @default(0)
+  errorCount   Int        @default(0)
+  errorSample  String?
+  createdAt    DateTime   @default(now())
+
+  sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
+
+  @@map("crawl_runs")
+}
