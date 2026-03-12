@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { PrismaModule } from './prisma.module';
+
+// Existing
 import { SchedulerService } from './scheduler/scheduler.service';
 import { CrawlProcessor } from './queues/crawl.processor';
 import { EmbedProcessor } from './queues/embed.processor';
@@ -13,6 +15,11 @@ import { EtendersConnector } from './connectors/etenders.connector';
 import { GemConnector } from './connectors/gem.connector';
 import { ConnectorRegistry } from './connectors/connector.registry';
 
+// New ERP queues
+import { WorkflowStatsProcessor } from './queues/workflow-stats.processor';
+import { ReportingProcessor } from './queues/reporting.processor';
+import { ReportSchedulerService } from './scheduler/report-scheduler.service';
+
 @Module({
   imports: [
     PrismaModule,
@@ -23,12 +30,17 @@ import { ConnectorRegistry } from './connectors/connector.registry';
       },
     }),
     BullModule.registerQueue(
+      // Existing queues — preserved
       { name: 'crawl' },
       { name: 'embed' },
       { name: 'dedupe' },
+      // New ERP queues
+      { name: 'workflow-stats' },
+      { name: 'reporting' },
     ),
   ],
   providers: [
+    // Existing — preserved
     SchedulerService,
     CrawlProcessor,
     EmbedProcessor,
@@ -40,6 +52,11 @@ import { ConnectorRegistry } from './connectors/connector.registry';
     EtendersConnector,
     GemConnector,
     ConnectorRegistry,
+
+    // New ERP processors
+    WorkflowStatsProcessor,
+    ReportingProcessor,
+    ReportSchedulerService,
   ],
 })
 export class WorkerModule {}
