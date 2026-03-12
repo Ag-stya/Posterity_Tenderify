@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, NotFoundException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../common/prisma.service';
@@ -19,7 +19,6 @@ export class AuthService {
 
     const tokens = await this.generateTokens(user.id, user.email, user.role);
 
-    // Store hashed refresh token
     const refreshHash = await bcrypt.hash(tokens.refreshToken, 10);
     await this.prisma.user.update({
       where: { id: user.id },
@@ -80,6 +79,107 @@ export class AuthService {
       data: { email, passwordHash, role },
     });
     return { id: user.id, email: user.email, role: user.role };
+  }
+
+  /**
+   * List all users (admin only)
+   */
+  async listUsers() {
+    return this.prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        profile: {
+          select: {
+            fullName: true,
+            designation: true,
+            teamName: true,
+            avatarUrl: true,
+          },
+        },
+      },
+      orderBy: [{ role: 'asc' }, { email: 'asc' }],
+    });
+  }
+
+  /**
+   * Get a user's profile
+   */
+  async getUserProfile(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        profile: {
+          select: {
+            fullName: true,
+            designation: true,
+            teamName: true,
+            managerUserId: true,
+            avatarUrl: true,
+          },
+        },
+      },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  /**
+   * Update a user's profile (user can update own, admin can update any)
+   */
+  async updateUserProfile(
+    userId: string,
+    data: {
+      fullName?: string;
+      designation?: string;
+      teamName?: string;
+      managerUserId?: string;
+    },
+  ) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const profile = await this.prisma.userProfile.upsert({
+      where: { userId },
+      create: {
+        userId,
+        fullName: data.fullName || null,
+        designation: data.designation || null,
+        teamName: data.teamName || null,
+        managerUserId: data.managerUserId || null,
+      },
+      update: {
+        fullName: data.fullName !== undefined ? data.fullName : undefined,
+        designation: data.designation !== undefined ? data.designation : undefined,
+        teamName: data.teamName !== undefined ? data.teamName : undefined,
+        managerUserId: data.managerUserId !== undefined ? data.managerUserId : undefined,
+      },
+    });
+
+    return profile;
+  }
+
+  /**
+   * Toggle user active status (admin only)
+   */
+  async toggleUserActive(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive: !user.isActive },
+    });
+
+    return { id: updated.id, email: updated.email, isActive: updated.isActive };
   }
 
   private async generateTokens(userId: string, email: string, role: string) {

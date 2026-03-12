@@ -70,27 +70,21 @@ export class CrawlProcessor extends WorkerHost {
 
           const canonicalDetailUrl = url.startsWith('http') ? url : new URL(url, site.baseUrl).toString();
 
-          const existing = await this.prisma.tender.findUnique({
-            where: { sourceUrl: canonicalDetailUrl },
-          });
+          const raw =
+            typeof (connector as any).fetchDetailWithSite === 'function'
+              ? await (connector as any).fetchDetailWithSite(canonicalDetailUrl, siteConfig)
+              : await connector.fetchDetail(canonicalDetailUrl);
 
-          // ✅ session-aware detail fetch when available
-          const anyConnector = connector as any;
-            const html =typeof(connector as any).fetchDetailWithSite==='function'
-              ?await(connector as any).fetchDetailWithSite(canonicalDetailUrl,siteConfig)
-              :await connector.fetchDetail(canonicalDetailUrl);
-
-
-          if (!html) {
+          if (!raw) {
             errorCount++;
             if (!errorSample) errorSample = `${canonicalDetailUrl}: empty detail response`;
             this.logger.warn(`Empty detail HTML for ${canonicalDetailUrl}`);
             continue;
           }
 
-          const normalized = connector.parseDetail(html, canonicalDetailUrl, siteConfig);
+          const normalized = connector.parseDetail(raw, canonicalDetailUrl, siteConfig);
 
-          // if parse fails, skip insert (DON’T create garbage rows)
+          // If parse fails, skip insert. Do not create garbage rows.
           if (!normalized) continue;
 
           normalized.sourceUrl = normalized.sourceUrl?.startsWith('http')
@@ -99,6 +93,24 @@ export class CrawlProcessor extends WorkerHost {
 
           const searchText = buildSearchText(normalized, site.name);
           const contentHash = computeContentHash(normalized);
+
+          /**
+           * IMPORTANT:
+           * Lookup must happen AFTER parseDetail(), because some connectors
+           * (especially GeM) decide canonical sourceUrl only after parsing.
+           *
+           * We first try exact sourceUrl.
+           * Then, only if sourceTenderId exists, we try same-source-site + same-sourceTenderId.
+           */
+          const existing = await this.prisma.tender.findFirst({
+            where: {
+              sourceSiteId: site.id,
+              OR: [
+                { sourceUrl: normalized.sourceUrl },
+                ...(normalized.sourceTenderId ? [{ sourceTenderId: normalized.sourceTenderId }] : []),
+              ],
+            },
+          });
 
           if (existing) {
             if (existing.contentHash !== contentHash) {
@@ -120,8 +132,19 @@ export class CrawlProcessor extends WorkerHost {
                   fetchedAt: new Date(),
                 },
               });
+
               itemsUpdated++;
               await this.embedQueue.add('embed:tender', { tenderId: existing.id });
+            } else {
+              // Even if unchanged, mark it seen again.
+              await this.prisma.tender.update({
+                where: { id: existing.id },
+                data: {
+                  fetchedAt: new Date(),
+                  status: normalized.status,
+                  deadlineAt: normalized.deadlineAt,
+                },
+              });
             }
           } else {
             const tender = await this.prisma.tender.create({
@@ -139,6 +162,7 @@ export class CrawlProcessor extends WorkerHost {
                 status: normalized.status,
                 searchText,
                 contentHash,
+                fetchedAt: new Date(),
               },
             });
 

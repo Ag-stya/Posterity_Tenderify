@@ -62,7 +62,6 @@ export async function apiFetch(path: string, options: RequestInit = {}): Promise
 
   let res = await fetch(`${API_URL}${path}`, { ...options, headers });
 
-  // If 401, try refresh
   if (res.status === 401 && tokens) {
     const newAccess = await refreshAccessToken();
     if (newAccess) {
@@ -110,15 +109,131 @@ export function getUser(): { id: string; email: string; role: string } | null {
   if (typeof window === 'undefined') return null;
   const raw = localStorage.getItem('user');
   if (!raw) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 export function isAuthenticated(): boolean {
   return !!getTokens();
 }
+
+// ─── ERP API helpers ─────────────────────────────────────────
+
+export const workflowApi = {
+  enter: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/enter`, { method: 'POST' }),
+  get: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}`),
+  updateStage: (tenderId: string, stage: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/stage`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stage }),
+    }),
+  reject: (tenderId: string, rejectionReason: string, failedAtStage: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ rejectionReason, failedAtStage }),
+    }),
+  summary: () => apiFetch('/workflow/summary'),
+  list: (params?: Record<string, string>) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return apiFetch(`/workflow/tenders?${qs}`);
+  },
+};
+
+export const stageApi = {
+  assign: (tenderId: string, stage: string, assignedUserId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/stages/${stage}/assign`, {
+      method: 'PUT',
+      body: JSON.stringify({ assignedUserId }),
+    }),
+  updateStatus: (tenderId: string, stage: string, status: string, completionNote?: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/stages/${stage}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, completionNote }),
+    }),
+  getStages: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/stages`),
+  myAssignments: (params?: Record<string, string>) => {
+    const qs = new URLSearchParams(params || {}).toString();
+    return apiFetch(`/workflow/my-assignments?${qs}`);
+  },
+};
+
+export const notesApi = {
+  add: (tenderId: string, noteText: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/notes`, {
+      method: 'POST',
+      body: JSON.stringify({ noteText }),
+    }),
+  list: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/notes`),
+};
+
+export const activityApi = {
+  tender: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/activity`),
+  me: () => apiFetch('/activity/me'),
+  user: (userId: string) => apiFetch(`/activity/users/${userId}`),
+  all: (page?: number) => apiFetch(`/activity/all?page=${page || 1}`),
+};
+
+export const dashboardApi = {
+  me: () => apiFetch('/dashboard/me'),
+  adminOverview: () => apiFetch('/dashboard/admin/overview'),
+  adminUser: (userId: string) => apiFetch(`/dashboard/admin/users/${userId}`),
+};
+
+export const productivityApi = {
+  me: (days?: number) => apiFetch(`/productivity/me?days=${days || 30}`),
+  user: (userId: string, days?: number) =>
+    apiFetch(`/productivity/users/${userId}?days=${days || 30}`),
+  leaderboard: (days?: number) =>
+    apiFetch(`/productivity/leaderboard?days=${days || 7}`),
+  rules: () => apiFetch('/productivity/rules'),
+  updateRule: (id: string, scoreValue: number, isActive: boolean) =>
+    apiFetch(`/productivity/rules/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ scoreValue, isActive }),
+    }),
+};
+
+export const reportingApi = {
+  run: (reportType: string) =>
+    apiFetch('/reports/run', {
+      method: 'POST',
+      body: JSON.stringify({ reportType }),
+    }),
+  runs: (page?: number) => apiFetch(`/reports/runs?page=${page || 1}`),
+  runDetail: (id: string) => apiFetch(`/reports/runs/${id}`),
+  subscriptions: () => apiFetch('/reports/subscriptions'),
+  addSubscription: (reportType: string, recipientEmail: string) =>
+    apiFetch('/reports/subscriptions', {
+      method: 'POST',
+      body: JSON.stringify({ reportType, recipientEmail }),
+    }),
+  removeSubscription: (id: string) =>
+    apiFetch(`/reports/subscriptions/${id}`, { method: 'DELETE' }),
+};
+
+// ─── Users & Profiles API ────────────────────────────────────
+
+export const usersApi = {
+  list: () => apiFetch('/auth/admin/users'),
+  toggleActive: (userId: string) =>
+    apiFetch(`/auth/admin/users/${userId}/toggle-active`, { method: 'POST' }),
+  getProfile: (userId: string) =>
+    apiFetch(`/auth/admin/users/${userId}/profile`),
+  updateProfile: (userId: string, data: { fullName?: string; designation?: string; teamName?: string }) =>
+    apiFetch(`/auth/admin/users/${userId}/profile`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  getMyProfile: () => apiFetch('/auth/profile/me'),
+  updateMyProfile: (data: { fullName?: string; designation?: string; teamName?: string }) =>
+    apiFetch('/auth/profile/me', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+};
 
 export { API_URL };

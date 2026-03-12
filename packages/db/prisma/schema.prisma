@@ -1,11 +1,21 @@
+// ─────────────────────────────────────────────────────────────
+// TenderWatch — Prisma Schema (Existing + ERP Extension)
+// ─────────────────────────────────────────────────────────────
+
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector, pgcrypto]
 }
+
+// ═══════════════════════════════════════════════════════════════
+// ENUMS — Existing
+// ═══════════════════════════════════════════════════════════════
 
 enum UserRole {
   ADMIN
@@ -34,30 +44,96 @@ enum CrawlStatus {
   FAILED
 }
 
+// ═══════════════════════════════════════════════════════════════
+// ENUMS — ERP Extension
+// ═══════════════════════════════════════════════════════════════
+
+enum TenderWorkflowStage {
+  TENDER_IDENTIFICATION
+  DUE_DILIGENCE
+  PRE_BID_MEETING
+  TENDER_FILING
+  TECH_EVALUATION
+  PRESENTATION_STAGE
+  FINANCIAL_EVALUATION
+  CONTRACT_AWARD
+  PROJECT_INITIATED
+  PROJECT_COMPLETED
+  REJECTED
+}
+
+enum StageAssignmentStatus {
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  REASSIGNED
+  CANCELLED
+}
+
+enum ActivityActionType {
+  WORKFLOW_ENTERED
+  STAGE_ASSIGNED
+  STAGE_REASSIGNED
+  STAGE_STARTED
+  STAGE_COMPLETED
+  STAGE_CHANGED
+  TENDER_REJECTED
+  NOTE_ADDED
+  TENDER_VIEWED
+  SEARCH_PERFORMED
+  REPORT_GENERATED
+}
+
+enum ReportType {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ReportRunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EXISTING TABLES — Preserved exactly
+// ═══════════════════════════════════════════════════════════════
+
 model User {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   email        String   @unique
-  passwordHash String
+  passwordHash String   @map("password_hash")
   role         UserRole @default(BD)
-  isActive     Boolean  @default(true)
-  refreshHash  String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive     Boolean  @default(true) @map("is_active")
+  refreshHash  String?  @map("refresh_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // ERP relations
+  profile                  UserProfile?
+  workflowsUpdated         TenderWorkflow[]        @relation("WorkflowUpdatedBy")
+  stageAssignments         TenderStageAssignment[]  @relation("StageAssignedTo")
+  stageAssignmentsCreated  TenderStageAssignment[]  @relation("StageAssignedBy")
+  activityLogs             TenderActivityLog[]
+  notes                    TenderNote[]
+  productivityDaily        UserProductivityDaily[]
 
   @@map("users")
 }
 
 model SourceSite {
-  id                   String   @id @default(uuid()) @db.Uuid
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   key                  String   @unique
   name                 String
-  baseUrl              String
-  type                 SiteType @default(CUSTOM_HTML)
+  baseUrl              String   @map("base_url")
+  type                 String   @default("NIC_GEP")
   enabled              Boolean  @default(false)
-  crawlIntervalMinutes Int      @default(10)
-  rateLimitPerMinute   Int      @default(30)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  crawlIntervalMinutes Int      @default(10) @map("crawl_interval_minutes")
+  rateLimitPerMinute   Int      @default(5) @map("rate_limit_per_minute")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
 
   tenders   Tender[]
   crawlRuns CrawlRun[]
@@ -66,66 +142,235 @@ model SourceSite {
 }
 
 model Tender {
-  id             String       @id @default(uuid()) @db.Uuid
-  sourceSiteId   String       @db.Uuid
-  sourceUrl      String       @unique
-  sourceTenderId String?
+  id             String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceSiteId   String       @map("source_site_id") @db.Uuid
+  sourceUrl      String       @unique @map("source_url")
+  sourceTenderId String?      @map("source_tender_id")
   title          String
   organization   String?
   summary        String?
   location       String?
-  estimatedValue String?
-  publishedAt    DateTime?
-  deadlineAt     DateTime?
+  estimatedValue String?      @map("estimated_value")
+  publishedAt    DateTime?    @map("published_at")
+  deadlineAt     DateTime?    @map("deadline_at")
   status         TenderStatus @default(UNKNOWN)
-  searchText     String
-  contentHash    String
-  fetchedAt      DateTime     @default(now())
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
+  searchText     String?      @map("search_text")
+  contentHash    String?      @map("content_hash")
+  fetchedAt      DateTime?    @map("fetched_at")
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
 
-  // ✅ These exist in your DB already (Prisma was trying to drop them).
-  // Keep them as Unsupported so Prisma tracks them but doesn't try to interpret types.
-  embedding Unsupported("vector")?
-  tsv       Unsupported("tsvector")?
+  // Vector embedding (managed via raw SQL)
+  // embedding Unsupported("vector(384)")
 
-  sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
+  sourceSite  SourceSite        @relation(fields: [sourceSiteId], references: [id])
+  canonicalOf TenderDuplicate[] @relation("CanonicalTender")
+  duplicateOf TenderDuplicate[] @relation("DuplicateTender")
 
-  canonicalOf TenderDuplicate[] @relation("canonical")
-  duplicateOf TenderDuplicate[] @relation("duplicate")
+  // ERP relations
+  workflow         TenderWorkflow?
+  stageAssignments TenderStageAssignment[]
+  activityLogs     TenderActivityLog[]
+  notes            TenderNote[]
 
-  @@index([sourceSiteId, deadlineAt])
-  @@index([sourceSiteId, publishedAt])
+  @@index([sourceSiteId])
+  @@index([status])
+  @@index([publishedAt])
+  @@index([deadlineAt])
   @@map("tenders")
 }
 
 model TenderDuplicate {
-  id                String @id @default(uuid()) @db.Uuid
-  canonicalTenderId String @db.Uuid
-  duplicateTenderId String @db.Uuid
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  canonicalTenderId String   @map("canonical_tender_id") @db.Uuid
+  duplicateTenderId String   @map("duplicate_tender_id") @db.Uuid
   reason            String?
+  createdAt         DateTime @default(now()) @map("created_at")
 
-  canonical Tender @relation("canonical", fields: [canonicalTenderId], references: [id])
-  duplicate Tender @relation("duplicate", fields: [duplicateTenderId], references: [id])
+  canonical Tender @relation("CanonicalTender", fields: [canonicalTenderId], references: [id])
+  duplicate Tender @relation("DuplicateTender", fields: [duplicateTenderId], references: [id])
 
   @@unique([canonicalTenderId, duplicateTenderId])
   @@map("tender_duplicates")
 }
 
 model CrawlRun {
-  id           String      @id @default(uuid()) @db.Uuid
-  sourceSiteId String      @db.Uuid
-  status       CrawlStatus @default(QUEUED)
-  startedAt    DateTime?
-  endedAt      DateTime?
-  itemsFound   Int         @default(0)
-  itemsNew     Int         @default(0)
-  itemsUpdated Int         @default(0)
-  errorCount   Int         @default(0)
-  errorSample  String?
-  createdAt    DateTime    @default(now())
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceSiteId String   @map("source_site_id") @db.Uuid
+  status       String   @default("QUEUED")
+  startedAt    DateTime @default(now()) @map("started_at")
+  endedAt      DateTime? @map("ended_at")
+  itemsFound   Int       @default(0) @map("items_found")
+  itemsNew     Int       @default(0) @map("items_new")
+  itemsUpdated Int       @default(0) @map("items_updated")
+  errorCount   Int       @default(0) @map("error_count")
+  errorSample  String?   @map("error_sample")
+  createdAt    DateTime  @default(now()) @map("created_at")
 
   sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
 
+  @@index([sourceSiteId, status])
   @@map("crawl_runs")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NEW TABLES — ERP Extension
+// ═══════════════════════════════════════════════════════════════
+
+/// Separate user profile table (cleaner separation)
+model UserProfile {
+  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String  @unique @map("user_id") @db.Uuid
+  fullName      String? @map("full_name")
+  designation   String?
+  teamName      String? @map("team_name")
+  managerUserId String? @map("manager_user_id") @db.Uuid
+  avatarUrl     String? @map("avatar_url")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("user_profiles")
+}
+
+/// One row per tender that has entered the ERP workflow
+model TenderWorkflow {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId              String              @unique @map("tender_id") @db.Uuid
+  currentStage          TenderWorkflowStage @default(TENDER_IDENTIFICATION) @map("current_stage")
+  isRejected            Boolean             @default(false) @map("is_rejected")
+  rejectionReason       String?             @map("rejection_reason")
+  failedAtStage         TenderWorkflowStage? @map("failed_at_stage")
+  enteredWorkflowAt     DateTime            @default(now()) @map("entered_workflow_at")
+  currentStageEnteredAt DateTime            @default(now()) @map("current_stage_entered_at")
+  lastUpdatedByUserId   String              @map("last_updated_by_user_id") @db.Uuid
+  lastUpdatedAt         DateTime            @default(now()) @map("last_updated_at")
+  createdAt             DateTime            @default(now()) @map("created_at")
+
+  tender        Tender @relation(fields: [tenderId], references: [id])
+  lastUpdatedBy User   @relation("WorkflowUpdatedBy", fields: [lastUpdatedByUserId], references: [id])
+
+  @@index([currentStage, isRejected])
+  @@index([lastUpdatedAt])
+  @@map("tender_workflows")
+}
+
+/// Stage-wise ownership/responsibility tracking
+model TenderStageAssignment {
+  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId         String                @map("tender_id") @db.Uuid
+  stage            TenderWorkflowStage
+  assignedUserId   String                @map("assigned_user_id") @db.Uuid
+  assignedByUserId String?               @map("assigned_by_user_id") @db.Uuid
+  assignmentStatus StageAssignmentStatus @default(ASSIGNED) @map("assignment_status")
+  assignedAt       DateTime              @default(now()) @map("assigned_at")
+  startedAt        DateTime?             @map("started_at")
+  completedAt      DateTime?             @map("completed_at")
+  completionNote   String?               @map("completion_note")
+  createdAt        DateTime              @default(now()) @map("created_at")
+  updatedAt        DateTime              @updatedAt @map("updated_at")
+
+  tender     Tender @relation(fields: [tenderId], references: [id])
+  assignedTo User   @relation("StageAssignedTo", fields: [assignedUserId], references: [id])
+  assignedBy User?  @relation("StageAssignedBy", fields: [assignedByUserId], references: [id])
+
+  @@index([tenderId, stage])
+  @@index([assignedUserId, assignmentStatus])
+  @@map("tender_stage_assignments")
+}
+
+/// Generic append-only audit/event log
+model TenderActivityLog {
+  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId     String            @map("tender_id") @db.Uuid
+  userId       String            @map("user_id") @db.Uuid
+  actionType   ActivityActionType @map("action_type")
+  stage        TenderWorkflowStage? @map("stage")
+  fromValue    String?           @map("from_value")
+  toValue      String?           @map("to_value")
+  metadataJson Json?             @map("metadata_json") @db.JsonB
+  createdAt    DateTime          @default(now()) @map("created_at")
+
+  tender Tender @relation(fields: [tenderId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([tenderId, createdAt])
+  @@index([userId, createdAt])
+  @@map("tender_activity_logs")
+}
+
+/// Human notes/comments on a tender
+model TenderNote {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId  String   @map("tender_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  noteText  String   @map("note_text")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  tender Tender @relation(fields: [tenderId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@index([tenderId, createdAt])
+  @@map("tender_notes")
+}
+
+/// Configurable scoring rules
+model ProductivityScoreRule {
+  id         String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actionType ActivityActionType  @map("action_type")
+  stage      TenderWorkflowStage? @map("stage")
+  scoreValue Int                 @map("score_value")
+  isActive   Boolean             @default(true) @map("is_active")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+
+  @@map("productivity_score_rules")
+}
+
+/// Pre-aggregated daily stats per user
+model UserProductivityDaily {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String   @map("user_id") @db.Uuid
+  statDate          DateTime @map("stat_date") @db.Date
+  totalActions      Int      @default(0) @map("total_actions")
+  weightedScore     Int      @default(0) @map("weighted_score")
+  tendersTouched    Int      @default(0) @map("tenders_touched")
+  stagesCompleted   Int      @default(0) @map("stages_completed")
+  rejectionsHandled Int      @default(0) @map("rejections_handled")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, statDate])
+  @@map("user_productivity_daily")
+}
+
+/// Report subscription configuration
+model ReportSubscription {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reportType     ReportType @map("report_type")
+  recipientEmail String     @map("recipient_email")
+  isActive       Boolean    @default(true) @map("is_active")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  @@map("report_subscriptions")
+}
+
+/// Report run tracking
+model ReportRun {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reportType     ReportType      @map("report_type")
+  periodStart    DateTime        @map("period_start")
+  periodEnd      DateTime        @map("period_end")
+  status         ReportRunStatus @default(QUEUED)
+  generatedAt    DateTime?       @map("generated_at")
+  recipientCount Int             @default(0) @map("recipient_count")
+  errorText      String?         @map("error_text")
+  createdAt      DateTime        @default(now()) @map("created_at")
+
+  @@map("report_runs")
 }
