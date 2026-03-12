@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const { createHash } = require('crypto');
 
 const UserRole = { ADMIN: 'ADMIN', BD: 'BD' };
-const SiteType = { NIC_GEP: 'NIC_GEP', CPPP: 'CPPP', NPROCURE: 'NPROCURE', IREPS: 'IREPS', CUSTOM_HTML: 'CUSTOM_HTML' };
+const SiteType = { NIC_GEP: 'NIC_GEP', CPPP: 'CPPP', NPROCURE: 'NPROCURE', IREPS: 'IREPS', CUSTOM_HTML: 'CUSTOM_HTML',GEM:'GEM' };
 const TenderStatus = { OPEN: 'OPEN', CLOSED: 'CLOSED', UNKNOWN: 'UNKNOWN' };
 const CrawlStatus = { QUEUED: 'QUEUED', RUNNING: 'RUNNING', SUCCESS: 'SUCCESS', FAILED: 'FAILED' };
 

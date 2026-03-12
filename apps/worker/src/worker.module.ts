@@ -10,6 +10,7 @@ import { CpppConnector } from './connectors/cppp.connector';
 import { NprocureConnector } from './connectors/nprocure.connector';
 import { IrepsConnector } from './connectors/ireps.connector';
 import { EtendersConnector } from './connectors/etenders.connector';
+import { GemConnector } from './connectors/gem.connector';
 import { ConnectorRegistry } from './connectors/connector.registry';
 
 @Module({
@@ -37,6 +38,7 @@ import { ConnectorRegistry } from './connectors/connector.registry';
     NprocureConnector,
     IrepsConnector,
     EtendersConnector,
+    GemConnector,
     ConnectorRegistry,
   ],
 })

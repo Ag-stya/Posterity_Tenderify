@@ -18,6 +18,7 @@ enum SiteType {
   NPROCURE
   IREPS
   CUSTOM_HTML
+  GEM
 }
 
 enum TenderStatus {
@@ -47,16 +48,16 @@ model User {
 }
 
 model SourceSite {
-  id                  String   @id @default(uuid()) @db.Uuid
-  key                 String   @unique
-  name                String
-  baseUrl             String
-  type                SiteType @default(CUSTOM_HTML)
-  enabled             Boolean  @default(false)
-  crawlIntervalMinutes Int     @default(10)
-  rateLimitPerMinute  Int      @default(30)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                   String   @id @default(uuid()) @db.Uuid
+  key                  String   @unique
+  name                 String
+  baseUrl              String
+  type                 SiteType @default(CUSTOM_HTML)
+  enabled              Boolean  @default(false)
+  crawlIntervalMinutes Int      @default(10)
+  rateLimitPerMinute   Int      @default(30)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   tenders   Tender[]
   crawlRuns CrawlRun[]
@@ -83,6 +84,11 @@ model Tender {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
+  // ✅ These exist in your DB already (Prisma was trying to drop them).
+  // Keep them as Unsupported so Prisma tracks them but doesn't try to interpret types.
+  embedding Unsupported("vector")?
+  tsv       Unsupported("tsvector")?
+
   sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
 
   canonicalOf TenderDuplicate[] @relation("canonical")
@@ -94,10 +100,10 @@ model Tender {
 }
 
 model TenderDuplicate {
-  id                 String @id @default(uuid()) @db.Uuid
-  canonicalTenderId  String @db.Uuid
-  duplicateTenderId  String @db.Uuid
-  reason             String?
+  id                String @id @default(uuid()) @db.Uuid
+  canonicalTenderId String @db.Uuid
+  duplicateTenderId String @db.Uuid
+  reason            String?
 
   canonical Tender @relation("canonical", fields: [canonicalTenderId], references: [id])
   duplicate Tender @relation("duplicate", fields: [duplicateTenderId], references: [id])
@@ -107,17 +113,17 @@ model TenderDuplicate {
 }
 
 model CrawlRun {
-  id           String     @id @default(uuid()) @db.Uuid
-  sourceSiteId String     @db.Uuid
+  id           String      @id @default(uuid()) @db.Uuid
+  sourceSiteId String      @db.Uuid
   status       CrawlStatus @default(QUEUED)
   startedAt    DateTime?
   endedAt      DateTime?
-  itemsFound   Int        @default(0)
-  itemsNew     Int        @default(0)
-  itemsUpdated Int        @default(0)
-  errorCount   Int        @default(0)
+  itemsFound   Int         @default(0)
+  itemsNew     Int         @default(0)
+  itemsUpdated Int         @default(0)
+  errorCount   Int         @default(0)
   errorSample  String?
-  createdAt    DateTime   @default(now())
+  createdAt    DateTime    @default(now())
 
   sourceSite SourceSite @relation(fields: [sourceSiteId], references: [id])
 
