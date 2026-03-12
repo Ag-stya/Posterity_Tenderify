@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { apiFetch, isAuthenticated, getUser, logout } from '../lib/api';
+import { apiFetch, isAuthenticated, getUser, logout, workflowApi } from '../lib/api';
 
 interface SourceSite {
   id: string;
@@ -38,6 +38,20 @@ interface StatusData {
   }>;
 }
 
+const STAGE_LABELS: Record<string, { label: string; color: string }> = {
+  TENDER_IDENTIFICATION: { label: 'Identification', color: '#06b6d4' },
+  DUE_DILIGENCE: { label: 'Due Diligence', color: '#22d3ee' },
+  PRE_BID_MEETING: { label: 'Pre-Bid Meeting', color: '#34d399' },
+  TENDER_FILING: { label: 'Tender Filing', color: '#a3e635' },
+  TECH_EVALUATION: { label: 'Tech Eval', color: '#facc15' },
+  PRESENTATION_STAGE: { label: 'Presentation', color: '#fb923c' },
+  FINANCIAL_EVALUATION: { label: 'Financial Eval', color: '#f87171' },
+  CONTRACT_AWARD: { label: 'Contract Award', color: '#c084fc' },
+  PROJECT_INITIATED: { label: 'Project Init', color: '#818cf8' },
+  PROJECT_COMPLETED: { label: 'Completed', color: '#4ade80' },
+  REJECTED: { label: 'Rejected', color: '#ef4444' },
+};
+
 export default function SearchPage() {
   const router = useRouter();
   const user = getUser();
@@ -50,6 +64,9 @@ export default function SearchPage() {
   const [pageSize] = useState(20);
   const [searching, setSearching] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
+
+  // ERP workflow overlay: tenderId -> workflow info
+  const [workflowMap, setWorkflowMap] = useState<Record<string, { currentStage: string; isRejected: boolean }>>({});
 
   // Filter state
   const [selectedSites, setSelectedSites] = useState<string[]>([]);
@@ -92,6 +109,26 @@ export default function SearchPage() {
     return () => clearInterval(interval);
   }, [fetchStatus]);
 
+  // Fetch workflow status for search results
+  const fetchWorkflowOverlay = useCallback(async (tenderIds: string[]) => {
+    const map: Record<string, { currentStage: string; isRejected: boolean }> = {};
+    // Fetch in parallel — each call is lightweight
+    await Promise.all(
+      tenderIds.map(async (id) => {
+        try {
+          const res = await apiFetch(`/workflow/tenders/${id}`);
+          if (res.ok) {
+            const data = await res.json();
+            map[id] = { currentStage: data.currentStage, isRejected: data.isRejected };
+          }
+        } catch {
+          // Not in workflow — skip
+        }
+      })
+    );
+    setWorkflowMap(map);
+  }, []);
+
   // Search function
   const doSearch = useCallback(async (p: number = 1) => {
     setSearching(true);
@@ -112,6 +149,13 @@ export default function SearchPage() {
         setResults(data.items);
         setTotal(data.total);
         setPage(p);
+
+        // Fetch workflow overlay for returned tender IDs
+        if (data.items.length > 0) {
+          fetchWorkflowOverlay(data.items.map((t: any) => t.id));
+        } else {
+          setWorkflowMap({});
+        }
       }
     } catch (err) {
       console.error('Search failed:', err);
@@ -119,7 +163,7 @@ export default function SearchPage() {
       setSearching(false);
       setInitialLoad(false);
     }
-  }, [query, selectedSites, publishedFrom, publishedTo, closingSoonDays, location, pageSize]);
+  }, [query, selectedSites, publishedFrom, publishedTo, closingSoonDays, location, pageSize, fetchWorkflowOverlay]);
 
   // Load latest tenders on mount
   useEffect(() => {
@@ -170,8 +214,11 @@ export default function SearchPage() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center">
+          <div
+            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => router.push('/dashboard')}
+          >
+            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center">
               <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -249,7 +296,6 @@ export default function SearchPage() {
         {showFilters && (
           <div className="card p-4 mb-4">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Source sites multi-select */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Source Sites</label>
                 <select
@@ -263,16 +309,12 @@ export default function SearchPage() {
                   ))}
                 </select>
               </div>
-
-              {/* Date range */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Published From</label>
                 <input type="date" value={publishedFrom} onChange={e => setPublishedFrom(e.target.value)} className="input-field text-sm" />
                 <label className="block text-sm font-medium text-gray-700 mb-1 mt-2">Published To</label>
                 <input type="date" value={publishedTo} onChange={e => setPublishedTo(e.target.value)} className="input-field text-sm" />
               </div>
-
-              {/* Closing soon */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Closing Soon</label>
                 <select value={closingSoonDays} onChange={e => setClosingSoonDays(e.target.value)} className="input-field text-sm">
@@ -283,8 +325,6 @@ export default function SearchPage() {
                   <option value="30">Within 30 days</option>
                 </select>
               </div>
-
-              {/* Location */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
                 <input
@@ -296,7 +336,6 @@ export default function SearchPage() {
                 />
               </div>
             </div>
-
             <div className="flex items-center gap-2 mt-3">
               <button onClick={() => doSearch(1)} className="btn-primary text-sm">Apply Filters</button>
               <button
@@ -319,7 +358,7 @@ export default function SearchPage() {
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm text-gray-500">
             {initialLoad ? 'Loading...' : `${total} tenders found`}
-            {query && <span className="text-gray-400"> for "{query}"</span>}
+            {query && <span className="text-gray-400"> for &quot;{query}&quot;</span>}
           </p>
         </div>
 
@@ -336,76 +375,96 @@ export default function SearchPage() {
                   <th className="text-left px-4 py-3 font-semibold text-gray-700">Location</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">Est. Value</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-700">Source</th>
+                  <th className="text-left px-4 py-3 font-semibold text-gray-700">Workflow</th>
                   <th className="text-left px-4 py-3 font-semibold text-gray-700">Link</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {results.map((tender) => (
-                  <tr key={tender.id} className="hover:bg-brand-50/30 transition-colors">
-                    <td className="px-4 py-3 max-w-xs">
-                      <a
-                        href={tender.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-brand-700 hover:text-brand-900 font-medium hover:underline line-clamp-2"
-                      >
-                        {tender.title}
-                      </a>
-                      {/* Status badge */}
-                      <span className={`ml-2 ${
-                        tender.status === 'OPEN' ? 'badge-open' :
-                        tender.status === 'CLOSED' ? 'badge-closed' : 'badge-unknown'
-                      }`}>
-                        {tender.status}
-                      </span>
-                      {/* Also seen on */}
-                      {tender.alsoSeenOn.length > 0 && (
-                        <div className="mt-1 text-xs text-gray-400">
-                          Also seen on:{' '}
-                          {tender.alsoSeenOn.map((dup, i) => (
-                            <span key={i}>
-                              <a href={dup.sourceUrl} target="_blank" rel="noopener noreferrer"
-                                className="text-gray-500 hover:text-brand-600 underline">
-                                {dup.sourceSite.name}
-                              </a>
-                              {i < tender.alsoSeenOn.length - 1 && ', '}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">{tender.organization || '—'}</td>
-                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(tender.publishedAt)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">
-                      <div>{formatDate(tender.deadlineAt)}</div>
-                      {getDeadlineBadge(tender.deadlineAt)}
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{tender.location || '—'}</td>
-                    <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{tender.estimatedValue || '—'}</td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
-                        {tender.sourceSite.name}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <a
-                        href={tender.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-brand-600 hover:text-brand-800"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
-                    </td>
-                  </tr>
-                ))}
+                {results.map((tender) => {
+                  const wf = workflowMap[tender.id];
+                  const stageInfo = wf ? STAGE_LABELS[wf.currentStage] : null;
+
+                  return (
+                    <tr key={tender.id} className="hover:bg-brand-50/30 transition-colors">
+                      <td className="px-4 py-3 max-w-xs">
+                        <span
+                          onClick={() => router.push(`/tenders/${tender.id}`)}
+                          className="text-cyan-400 hover:text-cyan-300 font-medium hover:underline line-clamp-2 cursor-pointer"
+                        >
+                          {tender.title}
+                        </span>
+                        {/* Status badge */}
+                        <span className={`ml-2 ${
+                          tender.status === 'OPEN' ? 'badge-open' :
+                          tender.status === 'CLOSED' ? 'badge-closed' : 'badge-unknown'
+                        }`}>
+                          {tender.status}
+                        </span>
+                        {/* Also seen on */}
+                        {tender.alsoSeenOn.length > 0 && (
+                          <div className="mt-1 text-xs text-gray-400">
+                            Also on:{' '}
+                            {tender.alsoSeenOn.map((dup, i) => (
+                              <span key={i}>
+                                <a href={dup.sourceUrl} target="_blank" rel="noopener noreferrer"
+                                  className="text-gray-500 hover:text-brand-600 underline">
+                                  {dup.sourceSite.name}
+                                </a>
+                                {i < tender.alsoSeenOn.length - 1 && ', '}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">{tender.organization || '—'}</td>
+                      <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{formatDate(tender.publishedAt)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <div>{formatDate(tender.deadlineAt)}</div>
+                        {getDeadlineBadge(tender.deadlineAt)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">{tender.location || '—'}</td>
+                      <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{tender.estimatedValue || '—'}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                          {tender.sourceSite.name}
+                        </span>
+                      </td>
+                      {/* ERP Workflow Status Column */}
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {wf ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:brightness-110 transition"
+                            style={{ background: `${stageInfo?.color || '#666'}20`, color: stageInfo?.color || '#666' }}
+                            onClick={() => router.push(`/tenders/${tender.id}`)}
+                            title="Click to view workflow"
+                          >
+                            <span className="w-1.5 h-1.5 rounded-full" style={{ background: stageInfo?.color || '#666' }} />
+                            {wf.isRejected ? 'Rejected' : stageInfo?.label || wf.currentStage}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-600">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <a
+                          href={tender.sourceUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-brand-600 hover:text-brand-800"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {results.length === 0 && !searching && !initialLoad && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-12 text-center text-gray-400">
+                    <td colSpan={9} className="px-4 py-12 text-center text-gray-400">
                       <svg className="w-12 h-12 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                           d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

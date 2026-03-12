@@ -18,7 +18,7 @@ export default function LoginPage() {
 
     try {
       await login(email, password);
-      router.push('/search');
+      router.push('/dashboard');
     } catch (err: any) {
       setError(err.message || 'Login failed');
     } finally {
@@ -32,19 +32,23 @@ export default function LoginPage() {
         <div className="card p-8">
           {/* Logo / Title */}
           <div className="text-center mb-8">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-600 mb-4">
-              <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            {/* Posterity Logo */}
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 mb-4 shadow-lg shadow-cyan-500/20">
+              <svg viewBox="0 0 100 100" className="w-10 h-10" fill="none">
+                {/* Stylized P wing mark inspired by Posterity logo */}
+                <circle cx="50" cy="50" r="40" stroke="white" strokeWidth="3" fill="none" />
+                <path d="M30 65 L42 35 L50 50 L58 35 L70 65" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                <path d="M25 55 L40 40 L50 48 L60 40 L75 55" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.6" />
+                <path d="M35 60 L45 45 L50 50 L55 45 L65 60" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" opacity="0.4" />
               </svg>
             </div>
-            <h1 className="text-2xl font-bold text-gray-900">TenderWatch Live</h1>
-            <p className="text-sm text-gray-500 mt-1">Internal Tender Aggregator</p>
+            <h1 className="text-2xl font-bold text-white">TenderWatch</h1>
+            <p className="text-sm text-gray-400 mt-1">Government BD Workflow Platform</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Email</label>
               <input
                 type="email"
                 value={email}
@@ -57,7 +61,7 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+              <label className="block text-sm font-medium text-gray-300 mb-1">Password</label>
               <input
                 type="password"
                 value={password}
@@ -69,8 +73,8 @@ export default function LoginPage() {
             </div>
 
             {error && (
-              <div className="p-3 rounded-lg bg-red-50 border border-red-200">
-                <p className="text-sm text-red-700">{error}</p>
+              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30">
+                <p className="text-sm text-red-400">{error}</p>
               </div>
             )}
 
@@ -94,9 +98,14 @@ export default function LoginPage() {
           </form>
         </div>
 
-        <p className="text-center text-xs text-gray-400 mt-4">
-          Internal use only · BD Team Enablement
-        </p>
+        <div className="text-center mt-6">
+          <p className="text-xs text-gray-500">
+            Internal use only · BD Team Enablement
+          </p>
+          <p className="text-xs text-gray-600 mt-1">
+            Powered by <span className="text-cyan-500 font-medium">Posterity Consulting</span>
+          </p>
+        </div>
       </div>
     </div>
   );
