@@ -6,7 +6,7 @@ import { Queue } from 'bullmq';
 export class ReportSchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(ReportSchedulerService.name);
   private dailyTimer: NodeJS.Timeout | null = null;
-  private weeklyTimer: NodeJS.Timeout | null = null;
+  private checkTimer: NodeJS.Timeout | null = null;
 
   constructor(
     @InjectQueue('reporting') private readonly reportingQueue: Queue,
@@ -15,80 +15,90 @@ export class ReportSchedulerService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     this.logger.log('Report scheduler initialized');
 
-    // Schedule daily report at midnight IST (18:30 UTC previous day)
+    // Schedule daily report at 2:00 PM IST (08:30 UTC)
     this.scheduleDailyReport();
 
-    // Check every hour if weekly/monthly reports need to run
-    this.weeklyTimer = setInterval(() => this.checkScheduledReports(), 60 * 60 * 1000);
+    // Check every 30 minutes if weekly/monthly reports need to run
+    this.checkTimer = setInterval(() => this.checkScheduledReports(), 30 * 60 * 1000);
+
+    // Also check immediately on startup
+    setTimeout(() => this.checkScheduledReports(), 10000);
   }
 
   onModuleDestroy() {
     if (this.dailyTimer) clearTimeout(this.dailyTimer);
-    if (this.weeklyTimer) clearInterval(this.weeklyTimer);
+    if (this.checkTimer) clearInterval(this.checkTimer);
   }
 
+  /**
+   * Schedule daily report at 2:00 PM IST = 08:30 UTC
+   */
   private scheduleDailyReport() {
     const now = new Date();
-    // Next midnight IST = 18:30 UTC
-    const nextMidnight = new Date(now);
-    nextMidnight.setUTCHours(18, 30, 0, 0);
-    if (nextMidnight <= now) {
-      nextMidnight.setDate(nextMidnight.getDate() + 1);
+
+    const next2pmIST = new Date(now);
+    next2pmIST.setUTCHours(8, 30, 0, 0); // 2:00 PM IST = 08:30 UTC
+
+    if (next2pmIST <= now) {
+      next2pmIST.setDate(next2pmIST.getDate() + 1);
     }
 
-    const delay = nextMidnight.getTime() - now.getTime();
+    const delay = next2pmIST.getTime() - now.getTime();
 
     this.dailyTimer = setTimeout(async () => {
-      await this.enqueueDailyReport();
-      // Reschedule for next day
-      this.scheduleDailyReport();
+      await this.enqueueReport('DAILY');
+      this.scheduleDailyReport(); // Reschedule for next day
     }, delay);
 
-    this.logger.log(`Daily report scheduled in ${Math.round(delay / 60000)} minutes`);
+    const hours = Math.floor(delay / 3600000);
+    const mins = Math.round((delay % 3600000) / 60000);
+    this.logger.log(`Daily report (2:00 PM IST) scheduled in ${hours}h ${mins}m`);
   }
 
-  private async enqueueDailyReport() {
+  private async enqueueReport(reportType: 'DAILY' | 'WEEKLY' | 'MONTHLY') {
     try {
-      await this.reportingQueue.add('report:daily', { reportType: 'DAILY' }, {
+      // Check if same type already queued
+      const existing = await this.reportingQueue.getJobs(['active', 'waiting']);
+      const alreadyQueued = existing.some((j) => j.data?.reportType === reportType);
+
+      if (alreadyQueued) {
+        this.logger.log(`${reportType} report already queued, skipping`);
+        return;
+      }
+
+      await this.reportingQueue.add(`report:${reportType.toLowerCase()}`, { reportType }, {
         removeOnComplete: 50,
         removeOnFail: 20,
       });
-      this.logger.log('Daily report job enqueued');
+      this.logger.log(`${reportType} report job enqueued`);
     } catch (err: any) {
-      this.logger.error(`Failed to enqueue daily report: ${err.message}`);
+      this.logger.error(`Failed to enqueue ${reportType} report: ${err.message}`);
     }
   }
 
+  /**
+   * Check if weekly or monthly reports need to run
+   * Weekly: Monday 10:00 AM IST = 04:30 UTC
+   * Monthly: 1st of month 10:00 AM IST = 04:30 UTC
+   */
   private async checkScheduledReports() {
     const now = new Date();
-    const dayOfWeek = now.getDay(); // 0=Sunday
-    const dayOfMonth = now.getDate();
-    const hour = now.getHours();
 
-    // Weekly report: Monday 1 AM IST
-    if (dayOfWeek === 1 && hour >= 1 && hour < 2) {
-      const existing = await this.reportingQueue.getJobs(['active', 'waiting']);
-      const hasWeekly = existing.some((j) => j.data?.reportType === 'WEEKLY');
-      if (!hasWeekly) {
-        await this.reportingQueue.add('report:weekly', { reportType: 'WEEKLY' }, {
-          removeOnComplete: 20,
-          removeOnFail: 10,
-        });
-        this.logger.log('Weekly report job enqueued');
-      }
+    // Convert to IST for day/hour checks
+    const istOffset = 5.5 * 60 * 60 * 1000; // +05:30
+    const ist = new Date(now.getTime() + istOffset);
+    const istDay = ist.getUTCDay(); // 0=Sunday, 1=Monday
+    const istHour = ist.getUTCHours();
+    const istDate = ist.getUTCDate();
+
+    // Weekly report: Monday between 10:00-10:59 AM IST
+    if (istDay === 1 && istHour === 10) {
+      await this.enqueueReport('WEEKLY');
     }
 
-    // Monthly report: 1st of month, 2 AM IST
-    if (dayOfMonth === 1 && hour >= 2 && hour < 3) {
-      const existing = await this.reportingQueue.getJobs(['active', 'waiting']);
-      const hasMonthly = existing.some((j) => j.data?.reportType === 'MONTHLY');
-      if (!hasMonthly) {
-        await this.reportingQueue.add('report:monthly', { reportType: 'MONTHLY' }, {
-          removeOnComplete: 20,
-          removeOnFail: 10,
-        });
-        this.logger.log('Monthly report job enqueued');
-      }
+    // Monthly report: 1st of month between 10:00-10:59 AM IST
+    if (istDate === 1 && istHour === 10) {
+      await this.enqueueReport('MONTHLY');
     }
   }
 }

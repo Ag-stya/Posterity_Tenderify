@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { isAuthenticated, dashboardApi, productivityApi, getUser } from '../lib/api';
+import { isAuthenticated, dashboardApi, productivityApi, getUser, apiFetch } from '../lib/api';
 import Sidebar from '../components/Sidebar';
 
 const STAGE_LABELS: Record<string, { label: string; color: string; short: string }> = {
@@ -25,7 +25,6 @@ function ParticleCanvas() {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -41,7 +40,6 @@ function ParticleCanvas() {
     resize();
     window.addEventListener('resize', resize);
 
-    // Create particles
     for (let i = 0; i < 60; i++) {
       particles.push({
         x: Math.random() * canvas.offsetWidth,
@@ -56,22 +54,17 @@ function ParticleCanvas() {
 
     const animate = () => {
       ctx.clearRect(0, 0, canvas.offsetWidth, canvas.offsetHeight);
-
       for (const p of particles) {
         p.x += p.vx;
         p.y += p.vy;
-
         if (p.x < 0 || p.x > canvas.offsetWidth) p.vx *= -1;
         if (p.y < 0 || p.y > canvas.offsetHeight) p.vy *= -1;
-
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
         ctx.globalAlpha = p.opacity;
         ctx.fill();
       }
-
-      // Draw connections
       ctx.globalAlpha = 0.06;
       ctx.strokeStyle = '#06b6d4';
       ctx.lineWidth = 0.5;
@@ -79,8 +72,7 @@ function ParticleCanvas() {
         for (let j = i + 1; j < particles.length; j++) {
           const dx = particles[i].x - particles[j].x;
           const dy = particles[i].y - particles[j].y;
-          const dist = Math.sqrt(dx * dx + dy * dy);
-          if (dist < 120) {
+          if (Math.sqrt(dx * dx + dy * dy) < 120) {
             ctx.beginPath();
             ctx.moveTo(particles[i].x, particles[i].y);
             ctx.lineTo(particles[j].x, particles[j].y);
@@ -89,29 +81,17 @@ function ParticleCanvas() {
         }
       }
       ctx.globalAlpha = 1;
-
       animationId = requestAnimationFrame(animate);
     };
     animate();
 
-    return () => {
-      cancelAnimationFrame(animationId);
-      window.removeEventListener('resize', resize);
-    };
+    return () => { cancelAnimationFrame(animationId); window.removeEventListener('resize', resize); };
   }, []);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      className="absolute inset-0 w-full h-full pointer-events-none"
-      style={{ opacity: 0.6 }}
-    />
-  );
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" style={{ opacity: 0.6 }} />;
 }
 
-function MetricCard({ label, value, sub, color, icon }: {
-  label: string; value: string | number; sub?: string; color: string; icon: string;
-}) {
+function MetricCard({ label, value, sub, color, icon }: { label: string; value: string | number; sub?: string; color: string; icon: string }) {
   return (
     <div className="relative bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5 overflow-hidden group hover:border-white/20 transition-all">
       <div className="absolute top-0 right-0 w-24 h-24 rounded-full opacity-10 -translate-y-8 translate-x-8" style={{ background: color }} />
@@ -143,20 +123,9 @@ function PipelineBar({ stages }: { stages: Array<{ stage: string; count: number 
       <h3 className="text-white font-semibold mb-4">Pipeline Distribution</h3>
       <div className="flex rounded-xl overflow-hidden h-8 mb-4">
         {sorted.map((s) => (
-          <div
-            key={s.stage}
-            style={{
-              width: `${Math.max((s.count / total) * 100, s.count > 0 ? 3 : 0)}%`,
-              background: s.color,
-            }}
-            className="relative group cursor-pointer transition-all hover:brightness-110"
-            title={`${s.label}: ${s.count}`}
-          >
-            {s.count > 0 && (
-              <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white/90">
-                {s.count}
-              </span>
-            )}
+          <div key={s.stage} style={{ width: `${Math.max((s.count / total) * 100, s.count > 0 ? 3 : 0)}%`, background: s.color }}
+            className="relative group cursor-pointer transition-all hover:brightness-110" title={`${s.label}: ${s.count}`}>
+            {s.count > 0 && <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-white/90">{s.count}</span>}
           </div>
         ))}
       </div>
@@ -169,6 +138,164 @@ function PipelineBar({ stages }: { stages: Array<{ stage: string; count: number 
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+interface DeadlineItem {
+  id: string;
+  title: string;
+  organization: string | null;
+  deadlineAt: string;
+  sourceSite: { name: string };
+}
+
+function DeadlineAlerts({ router }: { router: any }) {
+  const [alerts, setAlerts] = useState<{ in24: DeadlineItem[]; in48: DeadlineItem[]; in72: DeadlineItem[] }>({ in24: [], in48: [], in72: [] });
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchAlerts = async () => {
+      try {
+        // Fetch tenders closing in next 3 days
+        const res = await apiFetch('/tenders/search?closingSoonDays=3&pageSize=50&page=1');
+        if (!res.ok) return;
+        const data = await res.json();
+        const items: DeadlineItem[] = data.items || [];
+
+        const now = Date.now();
+        const h24 = 24 * 60 * 60 * 1000;
+        const h48 = 48 * 60 * 60 * 1000;
+        const h72 = 72 * 60 * 60 * 1000;
+
+        const in24: DeadlineItem[] = [];
+        const in48: DeadlineItem[] = [];
+        const in72: DeadlineItem[] = [];
+
+        for (const item of items) {
+          if (!item.deadlineAt) continue;
+          const diff = new Date(item.deadlineAt).getTime() - now;
+          if (diff <= 0) continue;
+          if (diff <= h24) in24.push(item);
+          else if (diff <= h48) in48.push(item);
+          else if (diff <= h72) in72.push(item);
+        }
+
+        setAlerts({ in24, in48, in72 });
+      } catch (err) {
+        console.error('Failed to fetch deadline alerts:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const totalAlerts = alerts.in24.length + alerts.in48.length + alerts.in72.length;
+
+  if (loading) {
+    return (
+      <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+        <h3 className="text-white font-semibold mb-4">Deadline Alerts</h3>
+        <div className="text-gray-500 text-sm animate-pulse">Loading alerts...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-white font-semibold flex items-center gap-2">
+          <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          Deadline Alerts
+        </h3>
+        {totalAlerts > 0 && (
+          <span className="text-xs px-2 py-1 rounded-full bg-red-500/20 text-red-400 font-bold">{totalAlerts} closing soon</span>
+        )}
+      </div>
+
+      {totalAlerts === 0 ? (
+        <p className="text-gray-500 text-sm">No tenders closing in the next 72 hours</p>
+      ) : (
+        <div className="space-y-4 max-h-[400px] overflow-y-auto">
+          {/* 24 hours */}
+          {alerts.in24.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-xs font-bold text-red-400 uppercase tracking-wider">Within 24 hours ({alerts.in24.length})</span>
+              </div>
+              <div className="space-y-1.5">
+                {alerts.in24.slice(0, 5).map(t => (
+                  <div key={t.id} onClick={() => router.push(`/tenders/${t.id}`)}
+                    className="flex items-center gap-3 p-2.5 rounded-lg bg-red-500/5 border border-red-500/10 hover:bg-red-500/10 cursor-pointer transition">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">{t.title}</div>
+                      <div className="text-xs text-gray-500">{t.organization || t.sourceSite.name}</div>
+                    </div>
+                    <div className="text-xs text-red-400 font-bold whitespace-nowrap">
+                      {Math.ceil((new Date(t.deadlineAt).getTime() - Date.now()) / (1000 * 60 * 60))}h left
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 48 hours */}
+          {alerts.in48.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                <span className="text-xs font-bold text-amber-400 uppercase tracking-wider">24–48 hours ({alerts.in48.length})</span>
+              </div>
+              <div className="space-y-1.5">
+                {alerts.in48.slice(0, 5).map(t => (
+                  <div key={t.id} onClick={() => router.push(`/tenders/${t.id}`)}
+                    className="flex items-center gap-3 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/10 hover:bg-amber-500/10 cursor-pointer transition">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">{t.title}</div>
+                      <div className="text-xs text-gray-500">{t.organization || t.sourceSite.name}</div>
+                    </div>
+                    <div className="text-xs text-amber-400 font-bold whitespace-nowrap">
+                      {Math.ceil((new Date(t.deadlineAt).getTime() - Date.now()) / (1000 * 60 * 60))}h left
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* 72 hours */}
+          {alerts.in72.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="w-2 h-2 rounded-full bg-yellow-500" />
+                <span className="text-xs font-bold text-yellow-400 uppercase tracking-wider">48–72 hours ({alerts.in72.length})</span>
+              </div>
+              <div className="space-y-1.5">
+                {alerts.in72.slice(0, 5).map(t => (
+                  <div key={t.id} onClick={() => router.push(`/tenders/${t.id}`)}
+                    className="flex items-center gap-3 p-2.5 rounded-lg bg-yellow-500/5 border border-yellow-500/10 hover:bg-yellow-500/10 cursor-pointer transition">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm text-white font-medium truncate">{t.title}</div>
+                      <div className="text-xs text-gray-500">{t.organization || t.sourceSite.name}</div>
+                    </div>
+                    <div className="text-xs text-yellow-400 font-bold whitespace-nowrap">
+                      {Math.ceil((new Date(t.deadlineAt).getTime() - Date.now()) / (1000 * 60 * 60))}h left
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -217,60 +344,32 @@ export default function DashboardPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <Sidebar />
       <main className="ml-64 min-h-screen relative">
-        {/* Particle background */}
-        <div className="fixed inset-0 ml-64 pointer-events-none">
-          <ParticleCanvas />
-        </div>
+        <div className="fixed inset-0 ml-64 pointer-events-none"><ParticleCanvas /></div>
 
         <div className="relative z-10 p-8">
           {/* Header */}
           <div className="mb-8">
-            <div className="text-sm text-cyan-400 font-medium tracking-wider uppercase mb-1">
-              Welcome back
-            </div>
-            <h1 className="text-3xl font-bold tracking-tight">
-              {user?.email?.split('@')[0] || 'User'}'s Dashboard
-            </h1>
+            <div className="text-sm text-cyan-400 font-medium tracking-wider uppercase mb-1">Welcome back</div>
+            <h1 className="text-3xl font-bold tracking-tight">{user?.email?.split('@')[0] || 'User'}&apos;s Dashboard</h1>
             <p className="text-gray-500 mt-1">Real-time workflow metrics and productivity</p>
           </div>
 
           {/* Metric Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <MetricCard
-              label="Today's Score"
-              value={scores.today?.weightedScore || 0}
-              sub={`${scores.today?.totalActions || 0} actions`}
-              color="#06b6d4"
-              icon="M13 10V3L4 14h7v7l9-11h-7z"
-            />
-            <MetricCard
-              label="This Week"
-              value={scores.week?.weightedScore || 0}
-              sub={`${scores.week?.stagesCompleted || 0} stages completed`}
-              color="#818cf8"
-              icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
-            />
-            <MetricCard
-              label="This Month"
-              value={scores.month?.weightedScore || 0}
-              sub={`${scores.month?.totalActions || 0} total actions`}
-              color="#c084fc"
-              icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-            />
-            <MetricCard
-              label="Active Assignments"
-              value={assignments.length}
-              sub={`${dashboard?.totalStagesCompleted || 0} lifetime completed`}
-              color="#4ade80"
-              icon="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-            />
+            <MetricCard label="Today's Score" value={scores.today?.weightedScore || 0} sub={`${scores.today?.totalActions || 0} actions`} color="#06b6d4" icon="M13 10V3L4 14h7v7l9-11h-7z" />
+            <MetricCard label="This Week" value={scores.week?.weightedScore || 0} sub={`${scores.week?.stagesCompleted || 0} stages completed`} color="#818cf8" icon="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            <MetricCard label="This Month" value={scores.month?.weightedScore || 0} sub={`${scores.month?.totalActions || 0} total actions`} color="#c084fc" icon="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            <MetricCard label="Active Assignments" value={assignments.length} sub={`${dashboard?.totalStagesCompleted || 0} lifetime completed`} color="#4ade80" icon="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+          </div>
+
+          {/* Deadline Alerts (NEW) */}
+          <div className="mb-6">
+            <DeadlineAlerts router={router} />
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Pipeline distribution */}
-            <div className="lg:col-span-2">
-              <PipelineBar stages={stageData} />
-            </div>
+            {/* Pipeline */}
+            <div className="lg:col-span-2"><PipelineBar stages={stageData} /></div>
 
             {/* Leaderboard */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
@@ -278,68 +377,44 @@ export default function DashboardPage() {
               <div className="space-y-3">
                 {(leaderboard?.rankings || []).slice(0, 8).map((r: any, i: number) => (
                   <div key={r.userId} className="flex items-center gap-3">
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-                      i === 0 ? 'bg-yellow-500/20 text-yellow-400' :
-                      i === 1 ? 'bg-gray-400/20 text-gray-300' :
-                      i === 2 ? 'bg-orange-500/20 text-orange-400' :
-                      'bg-white/5 text-gray-500'
-                    }`}>
-                      {r.rank}
-                    </div>
+                    <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-yellow-500/20 text-yellow-400' : i === 1 ? 'bg-gray-400/20 text-gray-300' : i === 2 ? 'bg-orange-500/20 text-orange-400' : 'bg-white/5 text-gray-500'}`}>{r.rank}</div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-white truncate">
-                        {r.fullName || r.email?.split('@')[0]}
-                      </div>
+                      <div className="text-sm font-medium text-white truncate">{r.fullName || r.email?.split('@')[0]}</div>
                       <div className="text-xs text-gray-500">{r.totalActions} actions</div>
                     </div>
                     <div className="text-lg font-bold text-cyan-400">{r.weightedScore}</div>
                   </div>
                 ))}
-                {(!leaderboard?.rankings || leaderboard.rankings.length === 0) && (
-                  <p className="text-gray-500 text-sm">No data yet this week</p>
-                )}
+                {(!leaderboard?.rankings || leaderboard.rankings.length === 0) && <p className="text-gray-500 text-sm">No data yet this week</p>}
               </div>
             </div>
           </div>
 
           {/* Active Assignments & Recent Activity */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            {/* Active Assignments */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
               <h3 className="text-white font-semibold mb-4">My Active Assignments</h3>
               <div className="space-y-3 max-h-[360px] overflow-y-auto">
                 {assignments.slice(0, 10).map((a: any) => {
                   const stageInfo = STAGE_LABELS[a.stage] || { label: a.stage, color: '#666' };
                   return (
-                    <div
-                      key={a.id}
-                      onClick={() => router.push(`/tenders/${a.tenderId}`)}
-                      className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer transition-colors"
-                    >
+                    <div key={a.id} onClick={() => router.push(`/tenders/${a.tenderId}`)}
+                      className="flex items-center gap-3 p-3 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer transition-colors">
                       <div className="w-2 h-8 rounded-full" style={{ background: stageInfo.color }} />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium text-white truncate">
-                          {a.tender?.title || 'Tender'}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-0.5">
-                          {stageInfo.label} · {a.assignmentStatus}
-                        </div>
+                        <div className="text-sm font-medium text-white truncate">{a.tender?.title || 'Tender'}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{stageInfo.label} · {a.assignmentStatus}</div>
                       </div>
                       {a.tender?.deadlineAt && (
-                        <div className="text-xs text-gray-500">
-                          {new Date(a.tender.deadlineAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
-                        </div>
+                        <div className="text-xs text-gray-500">{new Date(a.tender.deadlineAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</div>
                       )}
                     </div>
                   );
                 })}
-                {assignments.length === 0 && (
-                  <p className="text-gray-500 text-sm">No active assignments</p>
-                )}
+                {assignments.length === 0 && <p className="text-gray-500 text-sm">No active assignments</p>}
               </div>
             </div>
 
-            {/* Recent Activity */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
               <h3 className="text-white font-semibold mb-4">Recent Activity</h3>
               <div className="space-y-3 max-h-[360px] overflow-y-auto">
@@ -347,25 +422,13 @@ export default function DashboardPage() {
                   <div key={a.id} className="flex items-start gap-3 text-sm">
                     <div className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-2 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <span className="text-gray-300">
-                        {a.actionType.replace(/_/g, ' ').toLowerCase()}
-                      </span>
-                      {a.tender?.title && (
-                        <span className="text-gray-500 ml-1">
-                          on <span className="text-gray-400">{a.tender.title.substring(0, 40)}...</span>
-                        </span>
-                      )}
-                      <div className="text-xs text-gray-600 mt-0.5">
-                        {new Date(a.createdAt).toLocaleString('en-IN', {
-                          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                        })}
-                      </div>
+                      <span className="text-gray-300">{a.actionType.replace(/_/g, ' ').toLowerCase()}</span>
+                      {a.tender?.title && <span className="text-gray-500 ml-1">on <span className="text-gray-400">{a.tender.title.substring(0, 40)}...</span></span>}
+                      <div className="text-xs text-gray-600 mt-0.5">{new Date(a.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
                     </div>
                   </div>
                 ))}
-                {activity.length === 0 && (
-                  <p className="text-gray-500 text-sm">No recent activity</p>
-                )}
+                {activity.length === 0 && <p className="text-gray-500 text-sm">No recent activity</p>}
               </div>
             </div>
           </div>

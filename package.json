@@ -8,7 +8,10 @@
     "db:seed": "pnpm --filter @tenderwatch/db seed",
     "db:push": "pnpm --filter @tenderwatch/db push",
     "dev:api": "pnpm --filter @tenderwatch/api dev",
-    "dev:worker": "pnpm --filter @tenderwatch/worker dev",
+    "dev:worker:crawl": "pnpm --filter @tenderwatch/worker dev:crawl",
+    "dev:worker:embed": "pnpm --filter @tenderwatch/worker dev:embed",
+    "start:worker:crawl": "pnpm --filter @tenderwatch/worker start:crawl",
+    "start:worker:embed": "pnpm --filter @tenderwatch/worker start:embed",
     "dev:web": "pnpm --filter @tenderwatch/web dev",
     "build": "pnpm -r build",
     "lint": "pnpm -r lint"

@@ -112,13 +112,13 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   // ERP relations
-  profile                  UserProfile?
-  workflowsUpdated         TenderWorkflow[]        @relation("WorkflowUpdatedBy")
-  stageAssignments         TenderStageAssignment[]  @relation("StageAssignedTo")
-  stageAssignmentsCreated  TenderStageAssignment[]  @relation("StageAssignedBy")
-  activityLogs             TenderActivityLog[]
-  notes                    TenderNote[]
-  productivityDaily        UserProductivityDaily[]
+  profile                 UserProfile?
+  workflowsUpdated        TenderWorkflow[]       @relation("WorkflowUpdatedBy")
+  stageAssignments        TenderStageAssignment[] @relation("StageAssignedTo")
+  stageAssignmentsCreated TenderStageAssignment[] @relation("StageAssignedBy")
+  activityLogs            TenderActivityLog[]
+  notes                   TenderNote[]
+  productivityDaily       UserProductivityDaily[]
 
   @@map("users")
 }
@@ -161,7 +161,7 @@ model Tender {
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
   // Vector embedding (managed via raw SQL)
-  // embedding Unsupported("vector(384)")
+  embedding Unsupported("vector(384)")?
 
   sourceSite  SourceSite        @relation(fields: [sourceSiteId], references: [id])
   canonicalOf TenderDuplicate[] @relation("CanonicalTender")
@@ -195,10 +195,10 @@ model TenderDuplicate {
 }
 
 model CrawlRun {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sourceSiteId String   @map("source_site_id") @db.Uuid
-  status       String   @default("QUEUED")
-  startedAt    DateTime @default(now()) @map("started_at")
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceSiteId String    @map("source_site_id") @db.Uuid
+  status       String    @default("QUEUED")
+  startedAt    DateTime  @default(now()) @map("started_at")
   endedAt      DateTime? @map("ended_at")
   itemsFound   Int       @default(0) @map("items_found")
   itemsNew     Int       @default(0) @map("items_new")
@@ -219,13 +219,13 @@ model CrawlRun {
 
 /// Separate user profile table (cleaner separation)
 model UserProfile {
-  id            String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId        String  @unique @map("user_id") @db.Uuid
-  fullName      String? @map("full_name")
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String   @unique @map("user_id") @db.Uuid
+  fullName      String?  @map("full_name")
   designation   String?
-  teamName      String? @map("team_name")
-  managerUserId String? @map("manager_user_id") @db.Uuid
-  avatarUrl     String? @map("avatar_url")
+  teamName      String?  @map("team_name")
+  managerUserId String?  @map("manager_user_id") @db.Uuid
+  avatarUrl     String?  @map("avatar_url")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -236,17 +236,17 @@ model UserProfile {
 
 /// One row per tender that has entered the ERP workflow
 model TenderWorkflow {
-  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenderId              String              @unique @map("tender_id") @db.Uuid
-  currentStage          TenderWorkflowStage @default(TENDER_IDENTIFICATION) @map("current_stage")
-  isRejected            Boolean             @default(false) @map("is_rejected")
-  rejectionReason       String?             @map("rejection_reason")
+  id                    String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId              String               @unique @map("tender_id") @db.Uuid
+  currentStage          TenderWorkflowStage  @default(TENDER_IDENTIFICATION) @map("current_stage")
+  isRejected            Boolean              @default(false) @map("is_rejected")
+  rejectionReason       String?              @map("rejection_reason")
   failedAtStage         TenderWorkflowStage? @map("failed_at_stage")
-  enteredWorkflowAt     DateTime            @default(now()) @map("entered_workflow_at")
-  currentStageEnteredAt DateTime            @default(now()) @map("current_stage_entered_at")
-  lastUpdatedByUserId   String              @map("last_updated_by_user_id") @db.Uuid
-  lastUpdatedAt         DateTime            @default(now()) @map("last_updated_at")
-  createdAt             DateTime            @default(now()) @map("created_at")
+  enteredWorkflowAt     DateTime             @default(now()) @map("entered_workflow_at")
+  currentStageEnteredAt DateTime             @default(now()) @map("current_stage_entered_at")
+  lastUpdatedByUserId   String               @map("last_updated_by_user_id") @db.Uuid
+  lastUpdatedAt         DateTime             @default(now()) @map("last_updated_at")
+  createdAt             DateTime             @default(now()) @map("created_at")
 
   tender        Tender @relation(fields: [tenderId], references: [id])
   lastUpdatedBy User   @relation("WorkflowUpdatedBy", fields: [lastUpdatedByUserId], references: [id])
@@ -282,15 +282,15 @@ model TenderStageAssignment {
 
 /// Generic append-only audit/event log
 model TenderActivityLog {
-  id           String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenderId     String            @map("tender_id") @db.Uuid
-  userId       String            @map("user_id") @db.Uuid
-  actionType   ActivityActionType @map("action_type")
+  id           String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenderId     String               @map("tender_id") @db.Uuid
+  userId       String               @map("user_id") @db.Uuid
+  actionType   ActivityActionType   @map("action_type")
   stage        TenderWorkflowStage? @map("stage")
-  fromValue    String?           @map("from_value")
-  toValue      String?           @map("to_value")
-  metadataJson Json?             @map("metadata_json") @db.JsonB
-  createdAt    DateTime          @default(now()) @map("created_at")
+  fromValue    String?              @map("from_value")
+  toValue      String?              @map("to_value")
+  metadataJson Json?                @map("metadata_json") @db.JsonB
+  createdAt    DateTime             @default(now()) @map("created_at")
 
   tender Tender @relation(fields: [tenderId], references: [id])
   user   User   @relation(fields: [userId], references: [id])
@@ -318,13 +318,13 @@ model TenderNote {
 
 /// Configurable scoring rules
 model ProductivityScoreRule {
-  id         String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  actionType ActivityActionType  @map("action_type")
+  id         String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actionType ActivityActionType   @map("action_type")
   stage      TenderWorkflowStage? @map("stage")
-  scoreValue Int                 @map("score_value")
-  isActive   Boolean             @default(true) @map("is_active")
-  createdAt  DateTime            @default(now()) @map("created_at")
-  updatedAt  DateTime            @updatedAt @map("updated_at")
+  scoreValue Int                  @map("score_value")
+  isActive   Boolean              @default(true) @map("is_active")
+  createdAt  DateTime             @default(now()) @map("created_at")
+  updatedAt  DateTime             @updatedAt @map("updated_at")
 
   @@map("productivity_score_rules")
 }
@@ -350,12 +350,12 @@ model UserProductivityDaily {
 
 /// Report subscription configuration
 model ReportSubscription {
-  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   reportType     ReportType @map("report_type")
-  recipientEmail String     @map("recipient_email")
-  isActive       Boolean    @default(true) @map("is_active")
-  createdAt      DateTime   @default(now()) @map("created_at")
-  updatedAt      DateTime   @updatedAt @map("updated_at")
+  recipientEmail String   @map("recipient_email")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("report_subscriptions")
 }

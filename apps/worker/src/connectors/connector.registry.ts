@@ -6,6 +6,7 @@ import { NprocureConnector } from './nprocure.connector';
 import { IrepsConnector } from './ireps.connector';
 import { EtendersConnector } from './etenders.connector';
 import { GemConnector } from './gem.connector';
+import { TendersOnTimeConnector } from './tendersontime.connector';
 
 @Injectable()
 export class ConnectorRegistry {
@@ -18,6 +19,7 @@ export class ConnectorRegistry {
     private readonly ireps: IrepsConnector,
     private readonly etenders: EtendersConnector,
     private readonly gem: GemConnector,
+    private readonly tendersOnTime: TendersOnTimeConnector,
   ) {
     this.connectors = new Map<string, IConnector>([
       ['NIC_GEP', this.nicgep],
@@ -26,6 +28,7 @@ export class ConnectorRegistry {
       ['IREPS', this.ireps],
       ['CUSTOM_HTML', this.nicgep],
       ['GEM', this.gem],
+      ['TENDERS_ON_TIME', this.tendersOnTime],
     ]);
   }
 
