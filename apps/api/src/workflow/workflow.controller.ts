@@ -18,6 +18,23 @@ import { TenderWorkflowStage } from '@prisma/client';
 export class WorkflowController {
   constructor(private readonly workflow: WorkflowService) {}
 
+  @Post('tenders/external')
+  async createExternalTender(
+    @Body() body: {
+      title: string;
+      organization?: string;
+      summary?: string;
+      location?: string;
+      estimatedValue?: string;
+      deadlineAt?: string;
+      publishedAt?: string;
+      sourceUrl?: string;
+    },
+    @Req() req: any,
+  ) {
+    return this.workflow.createExternalTender(req.user.sub, body);
+  }
+
   @Post('tenders/:tenderId/enter')
   async enterWorkflow(
     @Param('tenderId') tenderId: string,

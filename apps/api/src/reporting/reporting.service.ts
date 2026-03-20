@@ -3,6 +3,31 @@ import { PrismaService } from '../common/prisma.service';
 import { ReportType } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 
+const STAGE_LABELS: Record<string, string> = {
+  TENDER_IDENTIFICATION: 'Identification',
+  DUE_DILIGENCE: 'Due Diligence',
+  PRE_BID_MEETING: 'Pre-Bid Meeting',
+  TENDER_FILING: 'Tender Filing',
+  TECH_EVALUATION: 'Tech Evaluation',
+  PRESENTATION_STAGE: 'Presentation',
+  FINANCIAL_EVALUATION: 'Financial Eval',
+  CONTRACT_AWARD: 'Contract Award',
+  PROJECT_INITIATED: 'Project Init',
+  PROJECT_COMPLETED: 'Completed',
+  REJECTED: 'Rejected',
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  WORKFLOW_ENTERED: 'Entered Workflow',
+  STAGE_CHANGED: 'Moved Stage',
+  STAGE_ASSIGNED: 'Assigned to Stage',
+  STAGE_REASSIGNED: 'Reassigned',
+  STAGE_STARTED: 'Started Work',
+  STAGE_COMPLETED: 'Completed Stage',
+  TENDER_REJECTED: 'Rejected Tender',
+  NOTE_ADDED: 'Added Note',
+};
+
 @Injectable()
 export class ReportingService {
   private readonly logger = new Logger(ReportingService.name);
@@ -38,17 +63,6 @@ export class ReportingService {
           status: 'SUCCESS',
           generatedAt: new Date(),
           recipientCount: recipients.length,
-        },
-      });
-
-      // Log activity
-      await this.prisma.tenderActivityLog.create({
-        data: {
-          // Use first tender or a system tender ID
-          tenderId: reportData.topTenders?.[0]?.id || '00000000-0000-0000-0000-000000000000',
-          userId: '00000000-0000-0000-0000-000000000000', // System user
-          actionType: 'REPORT_GENERATED',
-          metadataJson: { reportType, reportRunId: reportRun.id },
         },
       });
 
@@ -139,6 +153,7 @@ export class ReportingService {
       userProductivity,
       completedStages,
       topTenders,
+      activityLogs,
     ] = await Promise.all([
       this.prisma.tenderWorkflow.count({ where: { isRejected: false } }),
 
@@ -161,7 +176,6 @@ export class ReportingService {
         },
       }),
 
-      // User productivity for the period
       this.prisma.userProductivityDaily.groupBy({
         by: ['userId'],
         where: { statDate: { gte: periodStart, lt: periodEnd } },
@@ -181,26 +195,89 @@ export class ReportingService {
         },
       }),
 
-      // Most active tenders
       this.prisma.tender.findMany({
         where: { workflow: { isNot: null } },
         select: { id: true, title: true, organization: true },
         take: 5,
         orderBy: { updatedAt: 'desc' },
       }),
+
+      // Fetch detailed activity logs for the period
+      this.prisma.tenderActivityLog.findMany({
+        where: {
+          createdAt: { gte: periodStart, lt: periodEnd },
+        },
+        select: {
+          id: true,
+          actionType: true,
+          stage: true,
+          fromValue: true,
+          toValue: true,
+          createdAt: true,
+          user: {
+            select: {
+              id: true,
+              email: true,
+              profile: { select: { fullName: true } },
+            },
+          },
+          tender: {
+            select: {
+              id: true,
+              title: true,
+              organization: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 200, // Limit to prevent huge emails
+      }),
     ]);
 
-    // Resolve user names
+    // Resolve user names for productivity — only include ACTIVE users
     const userIds = userProductivity.map((u) => u.userId);
     const users = await this.prisma.user.findMany({
       where: { id: { in: userIds } },
       select: {
         id: true,
         email: true,
+        isActive: true,
         profile: { select: { fullName: true } },
       },
     });
     const userMap = new Map(users.map((u) => [u.id, u]));
+    const activeUserIds = new Set(users.filter((u) => u.isActive).map((u) => u.id));
+
+    // Group activity logs by user — exclude inactive users
+    const userActivityMap = new Map<string, any[]>();
+    for (const log of activityLogs) {
+      const userId = log.user?.id || 'unknown';
+      if (!activeUserIds.has(userId)) continue; // Skip inactive users
+      if (!userActivityMap.has(userId)) {
+        userActivityMap.set(userId, []);
+      }
+      userActivityMap.get(userId)!.push(log);
+    }
+
+    // Build per-user activity detail (only active users)
+    const userActivityDetails: any[] = [];
+    for (const [userId, logs] of userActivityMap.entries()) {
+      const userInfo = logs[0]?.user;
+      userActivityDetails.push({
+        userId,
+        name: userInfo?.profile?.fullName || userInfo?.email || 'Unknown',
+        email: userInfo?.email || 'unknown',
+        activities: logs.map((l: any) => ({
+          action: l.actionType,
+          tenderTitle: l.tender?.title || 'Unknown Tender',
+          tenderOrg: l.tender?.organization || '',
+          stage: l.stage,
+          fromStage: l.fromValue,
+          toStage: l.toValue,
+          time: l.createdAt,
+        })),
+      });
+    }
 
     return {
       reportType,
@@ -215,17 +292,20 @@ export class ReportingService {
       newEntries,
       completedStages,
       topTenders,
-      userRankings: userProductivity.map((u, idx) => {
-        const user = userMap.get(u.userId);
-        return {
-          rank: idx + 1,
-          email: user?.email ?? 'unknown',
-          fullName: user?.profile?.fullName,
-          weightedScore: u._sum.weightedScore ?? 0,
-          totalActions: u._sum.totalActions ?? 0,
-          stagesCompleted: u._sum.stagesCompleted ?? 0,
-        };
-      }),
+      userRankings: userProductivity
+        .filter((u) => activeUserIds.has(u.userId)) // Exclude inactive users
+        .map((u, idx) => {
+          const user = userMap.get(u.userId);
+          return {
+            rank: idx + 1,
+            email: user?.email ?? 'unknown',
+            fullName: user?.profile?.fullName,
+            weightedScore: u._sum.weightedScore ?? 0,
+            totalActions: u._sum.totalActions ?? 0,
+            stagesCompleted: u._sum.stagesCompleted ?? 0,
+          };
+        }),
+      userActivityDetails,
     };
   }
 
@@ -236,6 +316,29 @@ export class ReportingService {
     return subs.map((s) => s.recipientEmail);
   }
 
+  private createTransporter() {
+    const host = process.env.SMTP_HOST;
+    const port = parseInt(process.env.SMTP_PORT || '587', 10);
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASS;
+
+    if (!host || !user || !pass) {
+      this.logger.warn('SMTP credentials not configured, skipping email send');
+      return null;
+    }
+
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: false,
+      auth: { user, pass },
+      tls: {
+        ciphers: 'SSLv3',
+        rejectUnauthorized: false,
+      },
+    });
+  }
+
   private async sendReportEmail(
     reportType: ReportType,
     data: any,
@@ -243,38 +346,85 @@ export class ReportingService {
     periodStart: Date,
     periodEnd: Date,
   ) {
-    const gmailUser = process.env.GMAIL_USER;
-    const gmailAppPassword = process.env.GMAIL_APP_PASSWORD;
+    const transporter = this.createTransporter();
+    if (!transporter) return;
 
-    if (!gmailUser || !gmailAppPassword) {
-      this.logger.warn('Gmail credentials not configured, skipping email send');
-      return;
-    }
-
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: gmailUser,
-        pass: gmailAppPassword,
-      },
-    });
-
+    const from = process.env.SMTP_FROM || `"TenderWatch ERP" <${process.env.SMTP_USER}>`;
     const subject = `TenderWatch ${reportType} Report — ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}`;
 
+    const cellStyle = 'padding:6px 12px;border:1px solid #e2e8f0;font-size:13px';
+    const headerCellStyle = 'padding:8px 12px;border:1px solid #e2e8f0;font-size:13px';
+
     const stageRows = data.stageCounts
-      .map((s: any) => `<tr><td style="padding:6px 12px;border:1px solid #e2e8f0">${s.stage.replace(/_/g, ' ')}</td><td style="padding:6px 12px;border:1px solid #e2e8f0;text-align:center">${s.count}</td></tr>`)
+      .map((s: any) => `<tr><td style="${cellStyle}">${(STAGE_LABELS[s.stage] || s.stage.replace(/_/g, ' '))}</td><td style="${cellStyle};text-align:center">${s.count}</td></tr>`)
       .join('');
 
     const userRows = data.userRankings
       .slice(0, 10)
-      .map((u: any) => `<tr><td style="padding:6px 12px;border:1px solid #e2e8f0">#${u.rank}</td><td style="padding:6px 12px;border:1px solid #e2e8f0">${u.fullName || u.email}</td><td style="padding:6px 12px;border:1px solid #e2e8f0;text-align:center">${u.weightedScore}</td><td style="padding:6px 12px;border:1px solid #e2e8f0;text-align:center">${u.totalActions}</td></tr>`)
+      .map((u: any) => `<tr><td style="${cellStyle}">#${u.rank}</td><td style="${cellStyle}">${u.fullName || u.email}</td><td style="${cellStyle};text-align:center">${u.weightedScore}</td><td style="${cellStyle};text-align:center">${u.totalActions}</td><td style="${cellStyle};text-align:center">${u.stagesCompleted}</td></tr>`)
       .join('');
 
+    // Build per-user activity detail HTML
+    let userActivityHtml = '';
+    if (data.userActivityDetails && data.userActivityDetails.length > 0) {
+      const userSections = data.userActivityDetails.map((u: any) => {
+        const activityRows = u.activities.slice(0, 25).map((a: any) => {
+          const actionLabel = ACTION_LABELS[a.action] || a.action.replace(/_/g, ' ');
+          const stageLabel = a.stage ? (STAGE_LABELS[a.stage] || a.stage.replace(/_/g, ' ')) : '';
+          const transition = (a.fromStage && a.toStage)
+            ? `${STAGE_LABELS[a.fromStage] || String(a.fromStage).replace(/_/g, ' ')} → ${STAGE_LABELS[a.toStage] || String(a.toStage).replace(/_/g, ' ')}`
+            : stageLabel;
+          const time = new Date(a.time).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+          const tenderShort = a.tenderTitle.length > 50 ? a.tenderTitle.substring(0, 50) + '...' : a.tenderTitle;
+
+          return `<tr>
+            <td style="${cellStyle};color:#6b7280">${time}</td>
+            <td style="${cellStyle}">${actionLabel}</td>
+            <td style="${cellStyle};max-width:200px">${tenderShort}</td>
+            <td style="${cellStyle};color:#6b7280">${transition}</td>
+          </tr>`;
+        }).join('');
+
+        const moreText = u.activities.length > 25 ? `<p style="color:#94a3b8;font-size:12px;margin:4px 0 0">...and ${u.activities.length - 25} more actions</p>` : '';
+
+        return `
+          <div style="margin-bottom:20px">
+            <h4 style="color:#1e293b;font-size:14px;margin:0 0 8px;padding-bottom:6px;border-bottom:2px solid #e2e8f0">
+              ${u.name} <span style="color:#94a3b8;font-weight:normal;font-size:12px">(${u.email})</span>
+              <span style="float:right;color:#06b6d4;font-size:12px">${u.activities.length} actions</span>
+            </h4>
+            <table style="width:100%;border-collapse:collapse">
+              <thead><tr style="background:#f8fafc">
+                <th style="${headerCellStyle};text-align:left">Time</th>
+                <th style="${headerCellStyle};text-align:left">Action</th>
+                <th style="${headerCellStyle};text-align:left">Tender</th>
+                <th style="${headerCellStyle};text-align:left">Stage</th>
+              </tr></thead>
+              <tbody>${activityRows}</tbody>
+            </table>
+            ${moreText}
+          </div>
+        `;
+      }).join('');
+
+      userActivityHtml = `
+        <h2 style="color:#1e293b;font-size:16px;margin:24px 0 16px;padding-top:16px;border-top:2px solid #e2e8f0">User Activity Details</h2>
+        <p style="color:#64748b;font-size:13px;margin:0 0 16px">Detailed breakdown of who did what on which tender during this period.</p>
+        ${userSections}
+      `;
+    } else {
+      userActivityHtml = `
+        <h2 style="color:#1e293b;font-size:16px;margin:24px 0 16px;padding-top:16px;border-top:2px solid #e2e8f0">User Activity Details</h2>
+        <p style="color:#94a3b8;font-size:13px">No user activity recorded during this period.</p>
+      `;
+    }
+
     const html = `
-      <div style="font-family:-apple-system,sans-serif;max-width:640px;margin:0 auto">
+      <div style="font-family:-apple-system,sans-serif;max-width:720px;margin:0 auto">
         <div style="background:#1e293b;color:#fff;padding:24px;border-radius:8px 8px 0 0">
           <h1 style="margin:0;font-size:22px">TenderWatch ${reportType} Report</h1>
           <p style="margin:8px 0 0;opacity:0.8">${periodStart.toLocaleDateString()} — ${periodEnd.toLocaleDateString()}</p>
+          <p style="margin:4px 0 0;opacity:0.6;font-size:12px">Posterity Consulting</p>
         </div>
         <div style="padding:24px;border:1px solid #e2e8f0;border-top:none">
           <h2 style="color:#1e293b;font-size:16px;margin:0 0 16px">Overview</h2>
@@ -287,24 +437,32 @@ export class ReportingService {
 
           <h2 style="color:#1e293b;font-size:16px;margin:0 0 16px">Stage Distribution</h2>
           <table style="width:100%;border-collapse:collapse;margin-bottom:24px">
-            <thead><tr style="background:#f8fafc"><th style="padding:8px 12px;border:1px solid #e2e8f0;text-align:left">Stage</th><th style="padding:8px 12px;border:1px solid #e2e8f0;text-align:center">Count</th></tr></thead>
+            <thead><tr style="background:#f8fafc"><th style="${headerCellStyle};text-align:left">Stage</th><th style="${headerCellStyle};text-align:center">Count</th></tr></thead>
             <tbody>${stageRows}</tbody>
           </table>
 
           <h2 style="color:#1e293b;font-size:16px;margin:0 0 16px">Team Productivity</h2>
           <table style="width:100%;border-collapse:collapse">
-            <thead><tr style="background:#f8fafc"><th style="padding:8px 12px;border:1px solid #e2e8f0">Rank</th><th style="padding:8px 12px;border:1px solid #e2e8f0;text-align:left">Team Member</th><th style="padding:8px 12px;border:1px solid #e2e8f0;text-align:center">Score</th><th style="padding:8px 12px;border:1px solid #e2e8f0;text-align:center">Actions</th></tr></thead>
+            <thead><tr style="background:#f8fafc">
+              <th style="${headerCellStyle}">Rank</th>
+              <th style="${headerCellStyle};text-align:left">Team Member</th>
+              <th style="${headerCellStyle};text-align:center">Score</th>
+              <th style="${headerCellStyle};text-align:center">Actions</th>
+              <th style="${headerCellStyle};text-align:center">Stages Done</th>
+            </tr></thead>
             <tbody>${userRows}</tbody>
           </table>
+
+          ${userActivityHtml}
         </div>
         <div style="padding:16px;text-align:center;color:#94a3b8;font-size:12px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
-          Generated by TenderWatch ERP
+          Generated by TenderWatch ERP · Posterity Consulting
         </div>
       </div>
     `;
 
     await transporter.sendMail({
-      from: `"TenderWatch ERP" <${gmailUser}>`,
+      from,
       to: recipients.join(', '),
       subject,
       html,

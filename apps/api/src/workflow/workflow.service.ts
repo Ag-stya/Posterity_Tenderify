@@ -9,6 +9,7 @@ import { PrismaService } from '../common/prisma.service';
 import { TenderWorkflowStage } from '@prisma/client';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { buildSearchText } from '@tenderwatch/shared';
 
 @Injectable()
 export class WorkflowService {
@@ -18,6 +19,105 @@ export class WorkflowService {
     private readonly prisma: PrismaService,
     @InjectQueue('workflow-stats') private readonly statsQueue: Queue,
   ) {}
+
+  /**
+   * Create an external (manually entered) tender and auto-enter into workflow
+   */
+  async createExternalTender(
+    userId: string,
+    data: {
+      title: string;
+      organization?: string;
+      summary?: string;
+      location?: string;
+      estimatedValue?: string;
+      deadlineAt?: string;
+      publishedAt?: string;
+      sourceUrl?: string;
+    },
+  ) {
+    if (!data.title || !data.title.trim()) {
+      throw new BadRequestException('Title is required');
+    }
+
+    // Find or create a "Manual Entry" source site
+    let manualSite = await this.prisma.sourceSite.findUnique({
+      where: { key: 'MANUAL_ENTRY' },
+    });
+
+    if (!manualSite) {
+      manualSite = await this.prisma.sourceSite.create({
+        data: {
+          key: 'MANUAL_ENTRY',
+          name: 'Manual Entry',
+          baseUrl: 'https://tenderwatch.internal',
+          type: 'CUSTOM_HTML',
+          enabled: false, // Not crawled
+          crawlIntervalMinutes: 9999,
+          rateLimitPerMinute: 1,
+        },
+      });
+    }
+
+    // Build a unique source URL for manual entries
+    const uniqueUrl = data.sourceUrl?.trim() ||
+      `manual://${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+
+    const searchText = [data.title, data.organization, data.summary, data.location, data.estimatedValue, 'Manual Entry']
+      .filter(Boolean)
+      .join('\n')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Transaction: create tender + enter workflow + log activity
+    const result = await this.prisma.$transaction(async (tx) => {
+      const tender = await tx.tender.create({
+        data: {
+          sourceSiteId: manualSite!.id,
+          sourceUrl: uniqueUrl,
+          title: data.title.trim(),
+          organization: data.organization?.trim() || null,
+          summary: data.summary?.trim() || null,
+          location: data.location?.trim() || null,
+          estimatedValue: data.estimatedValue?.trim() || null,
+          deadlineAt: data.deadlineAt ? new Date(data.deadlineAt) : null,
+          publishedAt: data.publishedAt ? new Date(data.publishedAt) : null,
+          status: data.deadlineAt && new Date(data.deadlineAt) > new Date() ? 'OPEN' : 'UNKNOWN',
+          searchText,
+        },
+      });
+
+      const workflow = await tx.tenderWorkflow.create({
+        data: {
+          tenderId: tender.id,
+          currentStage: TenderWorkflowStage.TENDER_IDENTIFICATION,
+          lastUpdatedByUserId: userId,
+        },
+      });
+
+      await tx.tenderActivityLog.create({
+        data: {
+          tenderId: tender.id,
+          userId,
+          actionType: 'WORKFLOW_ENTERED',
+          stage: TenderWorkflowStage.TENDER_IDENTIFICATION,
+          toValue: TenderWorkflowStage.TENDER_IDENTIFICATION,
+          metadataJson: { source: 'MANUAL_ENTRY' },
+        },
+      });
+
+      return { tender, workflow };
+    });
+
+    await this.statsQueue.add('stats', {
+      userId,
+      tenderId: result.tender.id,
+      actionType: 'WORKFLOW_ENTERED',
+      stage: 'TENDER_IDENTIFICATION',
+    });
+
+    return result;
+  }
 
   /**
    * Enter a tender into the ERP workflow

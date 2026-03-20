@@ -35,7 +35,7 @@ export class SearchService {
     // ── Hybrid search ──
     const queryEmbedding = await this.embedding.embed(q);
 
-    // Build WHERE clause fragments for filters
+    // Build WHERE clause fragments for filters (uses actual DB column names)
     const filterClauses = this.buildFilterClauses({ sourceSiteIds, publishedFrom, publishedTo, closingSoonDays, location });
 
     let candidates: Array<{ id: string; semantic_score: number; fts_score: number; published_at: Date | null }> = [];
@@ -44,7 +44,7 @@ export class SearchService {
       // Vector similarity search (top 200)
       const vectorStr = `[${queryEmbedding.join(',')}]`;
       const vectorResults: any[] = await this.prisma.$queryRawUnsafe(`
-        SELECT id, 1 - (embedding <=> $1::vector) as semantic_score, 0::float as fts_score, "publishedAt" as published_at
+        SELECT id, 1 - (embedding <=> $1::vector) as semantic_score, 0::float as fts_score, published_at
         FROM tenders
         WHERE embedding IS NOT NULL
         ${filterClauses.sql}
@@ -54,14 +54,27 @@ export class SearchService {
 
       // FTS search (top 200)
       const ftsQuery = q.split(/\s+/).filter(Boolean).join(' & ');
-      const ftsResults: any[] = await this.prisma.$queryRawUnsafe(`
-        SELECT id, 0::float as semantic_score, ts_rank(tsv, to_tsquery('english', $1)) as fts_score, "publishedAt" as published_at
-        FROM tenders
-        WHERE tsv @@ to_tsquery('english', $1)
-        ${filterClauses.sql}
-        ORDER BY fts_score DESC
-        LIMIT 200
-      `, ftsQuery, ...filterClauses.params);
+      let ftsResults: any[] = [];
+      try {
+        ftsResults = await this.prisma.$queryRawUnsafe(`
+          SELECT id, 0::float as semantic_score, ts_rank(tsv, to_tsquery('english', $1)) as fts_score, published_at
+          FROM tenders
+          WHERE tsv @@ to_tsquery('english', $1)
+          ${filterClauses.sql}
+          ORDER BY fts_score DESC
+          LIMIT 200
+        `, ftsQuery, ...filterClauses.params);
+      } catch (ftsErr: any) {
+        this.logger.warn(`FTS query failed for "${q}": ${ftsErr.message}, using ILIKE fallback`);
+        ftsResults = await this.prisma.$queryRawUnsafe(`
+          SELECT id, 0::float as semantic_score, 1::float as fts_score, published_at
+          FROM tenders
+          WHERE search_text ILIKE $1
+          ${filterClauses.sql}
+          ORDER BY published_at DESC NULLS LAST
+          LIMIT 200
+        `, `%${q}%`, ...filterClauses.params);
+      }
 
       // Merge unique IDs
       const scoreMap = new Map<string, { semantic: number; fts: number; publishedAt: Date | null }>();
@@ -110,7 +123,7 @@ export class SearchService {
       const ftsQuery = q.split(/\s+/).filter(Boolean).join(' & ');
       try {
         candidates = await this.prisma.$queryRawUnsafe(`
-          SELECT id, ts_rank(tsv, to_tsquery('english', $1)) as semantic_score, 0::float as fts_score, "publishedAt" as published_at
+          SELECT id, ts_rank(tsv, to_tsquery('english', $1)) as semantic_score, 0::float as fts_score, published_at
           FROM tenders
           WHERE tsv @@ to_tsquery('english', $1)
           ${filterClauses.sql}
@@ -120,11 +133,11 @@ export class SearchService {
       } catch {
         // If FTS fails (e.g. bad query syntax), fall back to ILIKE
         candidates = await this.prisma.$queryRawUnsafe(`
-          SELECT id, 1::float as semantic_score, 0::float as fts_score, "publishedAt" as published_at
+          SELECT id, 1::float as semantic_score, 0::float as fts_score, published_at
           FROM tenders
-          WHERE "searchText" ILIKE $1
+          WHERE search_text ILIKE $1
           ${filterClauses.sql}
-          ORDER BY "publishedAt" DESC NULLS LAST
+          ORDER BY published_at DESC NULLS LAST
           LIMIT 200
         `, `%${q}%`, ...filterClauses.params);
       }
@@ -257,29 +270,29 @@ export class SearchService {
 
     if (filters.sourceSiteIds) {
       const ids = filters.sourceSiteIds.split(',').map(s => s.trim());
-      parts.push(`AND "sourceSiteId" = ANY($${paramIndex}::uuid[])`);
+      parts.push(`AND source_site_id = ANY($${paramIndex}::uuid[])`);
       params.push(ids);
       paramIndex++;
     }
     if (filters.publishedFrom) {
-      parts.push(`AND "publishedAt" >= $${paramIndex}::timestamp`);
+      parts.push(`AND published_at >= $${paramIndex}::timestamp`);
       params.push(new Date(filters.publishedFrom));
       paramIndex++;
     }
     if (filters.publishedTo) {
-      parts.push(`AND "publishedAt" <= $${paramIndex}::timestamp`);
+      parts.push(`AND published_at <= $${paramIndex}::timestamp`);
       params.push(new Date(filters.publishedTo));
       paramIndex++;
     }
     if (filters.closingSoonDays) {
       const future = new Date();
       future.setDate(future.getDate() + filters.closingSoonDays);
-      parts.push(`AND "deadlineAt" >= NOW() AND "deadlineAt" <= $${paramIndex}::timestamp`);
+      parts.push(`AND deadline_at >= NOW() AND deadline_at <= $${paramIndex}::timestamp`);
       params.push(future);
       paramIndex++;
     }
     if (filters.location) {
-      parts.push(`AND "location" ILIKE $${paramIndex}`);
+      parts.push(`AND location ILIKE $${paramIndex}`);
       params.push(`%${filters.location}%`);
       paramIndex++;
     }

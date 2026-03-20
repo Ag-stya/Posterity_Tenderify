@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { isAuthenticated, getUser, apiFetch } from '../../lib/api';
+import { isAuthenticated, getUser, apiFetch, usersApi } from '../../lib/api';
 import Sidebar from '../../components/Sidebar';
 
 interface UserItem {
@@ -25,6 +25,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [toggling, setToggling] = useState<string | null>(null);
 
   // New user form
   const [showForm, setShowForm] = useState(false);
@@ -43,13 +44,10 @@ export default function AdminUsersPage() {
 
   const loadUsers = async () => {
     try {
-      // Fetch all users via a custom query — we'll use the activity endpoint creatively
-      // or better, let's just call a simple endpoint
       const res = await apiFetch('/auth/admin/users');
       if (res.ok) {
         setUsers(await res.json());
       } else {
-        // Fallback: if endpoint doesn't exist, show just current user
         setUsers([]);
       }
     } catch (e) {
@@ -91,6 +89,39 @@ export default function AdminUsersPage() {
       setError(e.message || 'Failed to create user');
     } finally {
       setCreating(false);
+    }
+  };
+
+  const toggleUserActive = async (userId: string, email: string, currentlyActive: boolean) => {
+    // Don't allow deactivating yourself
+    if (userId === currentUser?.id) {
+      setError('You cannot deactivate your own account');
+      return;
+    }
+
+    const action = currentlyActive ? 'deactivate' : 'activate';
+    if (!confirm(`Are you sure you want to ${action} ${email}? ${currentlyActive ? 'They will no longer be able to log in.' : 'They will be able to log in again.'}`)) {
+      return;
+    }
+
+    setToggling(userId);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await usersApi.toggleActive(userId);
+      if (res.ok) {
+        const data = await res.json();
+        setSuccess(`${email} has been ${data.isActive ? 'activated' : 'deactivated'}`);
+        loadUsers();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setError(err.message || `Failed to ${action} user`);
+      }
+    } catch (e: any) {
+      setError(e.message || `Failed to ${action} user`);
+    } finally {
+      setToggling(null);
     }
   };
 
@@ -183,6 +214,7 @@ export default function AdminUsersPage() {
           <div className="text-sm text-gray-400 space-y-1">
             <p><strong className="text-gray-300">BD (Business Development):</strong> Can search tenders, enter them into workflow, move stages, add notes, view their dashboard and productivity scores.</p>
             <p><strong className="text-gray-300">Admin:</strong> Everything BD can do, plus manage users, view all user activity, access admin dashboard, run reports, and manage source sites.</p>
+            <p className="text-gray-500 mt-2">Deactivated users cannot log in and are excluded from email reports and leaderboards.</p>
           </div>
         </div>
 
@@ -202,48 +234,73 @@ export default function AdminUsersPage() {
                   <th className="text-left px-4 py-3 text-gray-500 font-medium">Role</th>
                   <th className="text-left px-4 py-3 text-gray-500 font-medium">Status</th>
                   <th className="text-left px-4 py-3 text-gray-500 font-medium">Created</th>
+                  <th className="text-right px-4 py-3 text-gray-500 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
-                  <tr key={u.id} className="border-b border-white/5 hover:bg-white/5 transition">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold flex-shrink-0">
-                          {u.email[0].toUpperCase()}
+                {users.map((u) => {
+                  const isSelf = u.id === currentUser?.id;
+                  return (
+                    <tr key={u.id} className={`border-b border-white/5 hover:bg-white/5 transition ${!u.isActive ? 'opacity-60' : ''}`}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                            u.isActive
+                              ? 'bg-gradient-to-br from-cyan-500 to-blue-600'
+                              : 'bg-gray-700'
+                          }`}>
+                            {u.email[0].toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="font-medium text-white">{u.profile?.fullName || u.email}</div>
+                            {u.profile?.fullName && <div className="text-xs text-gray-500">{u.email}</div>}
+                            {u.profile?.designation && <div className="text-xs text-gray-600">{u.profile.designation}</div>}
+                          </div>
                         </div>
-                        <div>
-                          <div className="font-medium text-white">{u.profile?.fullName || u.email}</div>
-                          {u.profile?.fullName && <div className="text-xs text-gray-500">{u.email}</div>}
-                          {u.profile?.designation && <div className="text-xs text-gray-600">{u.profile.designation}</div>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                        u.role === 'ADMIN' ? 'bg-purple-500/20 text-purple-400' : 'bg-cyan-500/20 text-cyan-400'
-                      }`}>
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        u.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
-                      }`}>
-                        {u.isActive ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">
-                      {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                          u.role === 'ADMIN' ? 'bg-purple-500/20 text-purple-400' : 'bg-cyan-500/20 text-cyan-400'
+                        }`}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          u.isActive ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                        }`}>
+                          {u.isActive ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">
+                        {new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {!isSelf && (
+                          <button
+                            onClick={() => toggleUserActive(u.id, u.email, u.isActive)}
+                            disabled={toggling === u.id}
+                            className={`text-xs px-3 py-1.5 rounded-lg font-medium transition disabled:opacity-50 ${
+                              u.isActive
+                                ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                                : 'bg-green-500/10 text-green-400 hover:bg-green-500/20'
+                            }`}
+                          >
+                            {toggling === u.id ? '...' : u.isActive ? 'Deactivate' : 'Activate'}
+                          </button>
+                        )}
+                        {isSelf && (
+                          <span className="text-xs text-gray-600">You</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (
             <div className="p-8 text-center">
-              <p className="text-gray-500 text-sm">User listing requires the admin users API endpoint.</p>
-              <p className="text-gray-600 text-xs mt-1">You can still create new users using the form above — they&apos;ll be able to log in immediately.</p>
+              <p className="text-gray-500 text-sm">No users found.</p>
             </div>
           )}
         </div>
