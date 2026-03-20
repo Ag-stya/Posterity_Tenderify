@@ -15,10 +15,8 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     this.logger.log('Scheduler initialized, starting crawl scheduling loop...');
-    // Initial check after 10 seconds (let worker stabilize)
-    setTimeout(() => this.checkAndEnqueue(), 3000);
-    // Then check every 60 seconds
-    this.intervalHandle = setInterval(() => this.checkAndEnqueue(), 15000);
+    setTimeout(() => this.checkAndEnqueue(), 10000);
+    this.intervalHandle = setInterval(() => this.checkAndEnqueue(), 60000);
   }
 
   onModuleDestroy() {
@@ -29,41 +27,52 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
 
   private async checkAndEnqueue() {
     try {
+      this.logger.log('Scheduler tick: checking crawl eligibility...');
+
       const enabledSites = await this.prisma.sourceSite.findMany({
         where: { enabled: true },
       });
 
+      this.logger.log(`Scheduler tick: enabledSites=${enabledSites.length}`);
+
+      const existingJobs = await this.crawlQueue.getJobs(['active', 'waiting', 'delayed']);
+      this.logger.log(`Scheduler tick: existing crawl jobs in queue=${existingJobs.length}`);
+
       for (const site of enabledSites) {
         const shouldCrawl = await this.shouldCrawlSite(site.id, site.crawlIntervalMinutes);
-        if (shouldCrawl) {
-          // Check if job already queued/running
-          const existingJobs = await this.crawlQueue.getJobs(['active', 'waiting', 'delayed']);
-          const alreadyQueued = existingJobs.some(
-            (j) => j.data?.sourceSiteId === site.id
-          );
 
-          if (!alreadyQueued) {
-            await this.crawlQueue.add(
-              `crawl:${site.key}`,
-              { sourceSiteId: site.id },
-              {
-                removeOnComplete: 100,
-                removeOnFail: 50,
-                attempts: 2,
-                backoff: { type: 'exponential', delay: 30000 },
-              }
-            );
-            this.logger.log(`Enqueued crawl job for ${site.name}`);
-          }
+        this.logger.log(
+          `Scheduler decision for ${site.name}: shouldCrawl=${shouldCrawl}, intervalMinutes=${site.crawlIntervalMinutes}`,
+        );
+
+        if (!shouldCrawl) continue;
+
+        const alreadyQueued = existingJobs.some((j) => j.data?.sourceSiteId === site.id);
+
+        this.logger.log(`Scheduler queue check for ${site.name}: alreadyQueued=${alreadyQueued}`);
+
+        if (!alreadyQueued) {
+          await this.crawlQueue.add(
+            `crawl:${site.key}`,
+            { sourceSiteId: site.id },
+            {
+              jobId: `crawl-${site.id}`,
+              removeOnComplete: 100,
+              removeOnFail: 50,
+              attempts: 2,
+              backoff: { type: 'exponential', delay: 30000 },
+            },
+          );
+          this.logger.log(`Enqueued crawl job for ${site.name}`);
         }
       }
     } catch (err: any) {
-      this.logger.error(`Scheduler error: ${err.message}`);
+      this.logger.error(`Scheduler error: ${err.message}`, err.stack);
     }
   }
 
   private async shouldCrawlSite(siteId: string, intervalMinutes: number): Promise<boolean> {
-    const lastSuccess = await this.prisma.crawlRun.findFirst({
+    const lastRun = await this.prisma.crawlRun.findFirst({
       where: {
         sourceSiteId: siteId,
         status: { in: ['SUCCESS', 'RUNNING'] },
@@ -71,12 +80,27 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: 'desc' },
     });
 
-    if (!lastSuccess) return true; // Never crawled before
-    if (lastSuccess.status === 'RUNNING') return false; // Already running
+    if (!lastRun) {
+      this.logger.log(`shouldCrawlSite(${siteId}): no previous run found -> true`);
+      return true;
+    }
 
-    const elapsed = Date.now() - (lastSuccess.endedAt || lastSuccess.startedAt || lastSuccess.createdAt).getTime();
+    if (lastRun.status === 'RUNNING') {
+      this.logger.warn(
+        `shouldCrawlSite(${siteId}): blocked by RUNNING row id=${lastRun.id}, startedAt=${lastRun.startedAt?.toISOString?.() ?? lastRun.startedAt}`,
+      );
+      return false;
+    }
+
+    const referenceTime = lastRun.endedAt || lastRun.startedAt || lastRun.createdAt;
+    const elapsed = Date.now() - referenceTime.getTime();
     const intervalMs = intervalMinutes * 60 * 1000;
+    const shouldRun = elapsed >= intervalMs;
 
-    return elapsed >= intervalMs;
+    this.logger.log(
+      `shouldCrawlSite(${siteId}): lastStatus=${lastRun.status}, referenceTime=${referenceTime.toISOString()}, elapsedMs=${elapsed}, intervalMs=${intervalMs}, shouldRun=${shouldRun}`,
+    );
+
+    return shouldRun;
   }
 }

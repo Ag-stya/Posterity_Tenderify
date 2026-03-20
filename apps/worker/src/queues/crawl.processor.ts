@@ -5,7 +5,7 @@ import { PrismaService } from '../prisma.service';
 import { ConnectorRegistry } from '../connectors/connector.registry';
 import { buildSearchText, computeContentHash } from '@tenderwatch/shared';
 
-@Processor('crawl', { concurrency: 2 })
+@Processor('crawl', { concurrency: 3 })
 export class CrawlProcessor extends WorkerHost {
   private readonly logger = new Logger(CrawlProcessor.name);
 
@@ -64,7 +64,15 @@ export class CrawlProcessor extends WorkerHost {
       const rpm = Math.max(1, site.rateLimitPerMinute ?? 1);
       const delayMs = Math.ceil(60000 / rpm);
 
+      let processed = 0;
+
       for (const url of detailUrls) {
+        processed++;
+
+        if (processed % 5 === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+
         try {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
 
@@ -83,8 +91,6 @@ export class CrawlProcessor extends WorkerHost {
           }
 
           const normalized = connector.parseDetail(raw, canonicalDetailUrl, siteConfig);
-
-          // If parse fails, skip insert. Do not create garbage rows.
           if (!normalized) continue;
 
           normalized.sourceUrl = normalized.sourceUrl?.startsWith('http')
@@ -94,14 +100,6 @@ export class CrawlProcessor extends WorkerHost {
           const searchText = buildSearchText(normalized, site.name);
           const contentHash = computeContentHash(normalized);
 
-          /**
-           * IMPORTANT:
-           * Lookup must happen AFTER parseDetail(), because some connectors
-           * (especially GeM) decide canonical sourceUrl only after parsing.
-           *
-           * We first try exact sourceUrl.
-           * Then, only if sourceTenderId exists, we try same-source-site + same-sourceTenderId.
-           */
           const existing = await this.prisma.tender.findFirst({
             where: {
               sourceSiteId: site.id,
@@ -134,9 +132,19 @@ export class CrawlProcessor extends WorkerHost {
               });
 
               itemsUpdated++;
-              await this.embedQueue.add('embed:tender', { tenderId: existing.id });
+
+              await this.embedQueue.add(
+                'embed:tender',
+                { tenderId: existing.id },
+                {
+                  jobId: `embed-${existing.id}`,
+                  removeOnComplete: 500,
+                  removeOnFail: 200,
+                  attempts: 3,
+                  backoff: { type: 'exponential', delay: 10000 },
+                },
+              );
             } else {
-              // Even if unchanged, mark it seen again.
               await this.prisma.tender.update({
                 where: { id: existing.id },
                 data: {
@@ -167,7 +175,18 @@ export class CrawlProcessor extends WorkerHost {
             });
 
             itemsNew++;
-            await this.embedQueue.add('embed:tender', { tenderId: tender.id });
+
+            await this.embedQueue.add(
+              'embed:tender',
+              { tenderId: tender.id },
+              {
+                jobId: `embed-${tender.id}`,
+                removeOnComplete: 500,
+                removeOnFail: 200,
+                attempts: 3,
+                backoff: { type: 'exponential', delay: 10000 },
+              },
+            );
           }
         } catch (err: any) {
           errorCount++;
@@ -176,7 +195,17 @@ export class CrawlProcessor extends WorkerHost {
         }
       }
 
-      await this.dedupeQueue.add('dedupe:batch', { sourceSiteId: site.id });
+      await this.dedupeQueue.add(
+        'dedupe:batch',
+        { sourceSiteId: site.id },
+        {
+          jobId: `dedupe-${site.id}`,
+          removeOnComplete: 50,
+          removeOnFail: 50,
+          attempts: 2,
+          backoff: { type: 'exponential', delay: 15000 },
+        },
+      );
 
       await this.prisma.crawlRun.update({
         where: { id: crawlRun.id },

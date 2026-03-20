@@ -21,8 +21,9 @@ export class EmbedProcessor extends WorkerHost {
       const { pipeline } = await import('@xenova/transformers');
       this.pipeline = await pipeline('feature-extraction', modelName);
       this.logger.log('Embedding model loaded in worker');
-    } catch (err) {
-      this.logger.error('Failed to load embedding model in worker', err);
+    } catch (err: any) {
+      this.logger.error('Failed to load embedding model in worker', err?.stack || err);
+      throw err;
     }
   }
 
@@ -33,8 +34,7 @@ export class EmbedProcessor extends WorkerHost {
     }
 
     if (!this.pipeline) {
-      this.logger.warn('Embedding model not available, skipping');
-      return;
+      throw new Error('Embedding model not available');
     }
 
     const { tenderId } = job.data;
@@ -65,7 +65,8 @@ export class EmbedProcessor extends WorkerHost {
 
       this.logger.debug(`Embedded tender ${tenderId}`);
     } catch (err: any) {
-      this.logger.error(`Failed to embed tender ${tenderId}: ${err.message}`);
+      this.logger.error(`Failed to embed tender ${tenderId}: ${err.message}`, err.stack);
+      throw err;
     }
   }
 }

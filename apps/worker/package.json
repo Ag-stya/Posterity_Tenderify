@@ -4,9 +4,13 @@
   "private": true,
   "scripts": {
     "build": "nest build",
-    "dev": "nest start --watch",
-    "start": "node dist/main.js",
-    "start:prod": "node dist/main.js"
+    "dev": "pnpm dev:crawl",
+    "dev:crawl": "cross-env WORKER_ROLE=crawl nest start --watch",
+    "dev:embed": "cross-env WORKER_ROLE=embed nest start --watch",
+    "start": "pnpm start:crawl",
+    "start:crawl": "cross-env WORKER_ROLE=crawl node dist/main.js",
+    "start:embed": "cross-env WORKER_ROLE=embed node dist/main.js",
+    "start:prod": "pnpm start:crawl"
   },
   "dependencies": {
     "@nestjs/bullmq": "^10.1.0",
@@ -19,6 +23,7 @@
     "axios": "^1.6.0",
     "bullmq": "^5.1.0",
     "cheerio": "^1.0.0-rc.12",
+    "cross-env": "^7.0.3",
     "ioredis": "^5.3.0",
     "nodemailer": "^8.0.2",
     "reflect-metadata": "^0.2.1",

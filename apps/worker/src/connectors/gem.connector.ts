@@ -5,7 +5,6 @@ import { NormalizedTender } from '@tenderwatch/shared';
 
 type GemDoc = Record<string, any>;
 type CookieJar = Record<string, string>;
-type EndDateRange = { from: string; to: string };
 type SearchWindow = { name: string; fromDays: number | null; toDays: number | null };
 
 type RankedHit = {
@@ -40,13 +39,20 @@ export class GemConnector implements IConnector {
   private readonly maxQueriesPerRun = 28;
 
   /**
-   * GeM is behaving like a search-driven listing endpoint, not a clean offset API.
-   * So we diversify through query packs + end-date windows instead of page-number crawling.
+   * IMPORTANT:
+   * D8-30 has been unstable and repeatedly returning 404 in runtime logs.
+   * So we keep GeM stable by default with ALL only.
+   *
+   * If you want to test the old extra window later, set:
+   * GEM_ENABLE_EXTRA_WINDOWS=true
    */
-  private readonly windows: SearchWindow[] = [
-    { name: 'ALL', fromDays: null, toDays: null },
-    { name: 'D8-30', fromDays: 8, toDays: 30 },
-  ];
+  private readonly windows: SearchWindow[] =
+    process.env.GEM_ENABLE_EXTRA_WINDOWS === 'true'
+      ? [
+          { name: 'ALL', fromDays: null, toDays: null },
+          { name: 'D8-30', fromDays: 8, toDays: 30 },
+        ]
+      : [{ name: 'ALL', fromDays: null, toDays: null }];
 
   /**
    * Strong business phrases
@@ -93,7 +99,6 @@ export class GemConnector implements IConnector {
 
   /**
    * Target ministries / agencies / bodies
-   * Keep these high-signal because org matches are extremely valuable.
    */
   private readonly organizationQueries = [
     'Ministry of Skill Development and Entrepreneurship',
@@ -302,8 +307,12 @@ export class GemConnector implements IConnector {
       .sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
 
-        const aDeadline = this.parseDate(this.pick0(a.doc.final_end_date_sort))?.getTime() ?? Number.MAX_SAFE_INTEGER;
-        const bDeadline = this.parseDate(this.pick0(b.doc.final_end_date_sort))?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        const aDeadline =
+          this.parseDate(this.pick0(a.doc.final_end_date_sort))?.getTime() ??
+          Number.MAX_SAFE_INTEGER;
+        const bDeadline =
+          this.parseDate(this.pick0(b.doc.final_end_date_sort))?.getTime() ??
+          Number.MAX_SAFE_INTEGER;
 
         return aDeadline - bDeadline;
       })
@@ -367,11 +376,6 @@ export class GemConnector implements IConnector {
     const publishedAt = this.parseDate(this.pick0(doc.final_start_date_sort));
     const deadlineAt = this.parseDate(this.pick0(doc.final_end_date_sort));
 
-    /**
-     * Keep sourceUrl stable.
-     * This URL is used as canonical identity in DB.
-     * Even if GeM ignores the query params later, DB uniqueness remains correct.
-     */
     const sourceUrl =
       `https://bidplus.gem.gov.in/bidlists?bid_no=${encodeURIComponent(bidNo)}` +
       (raNo ? `&ra_no=${encodeURIComponent(raNo)}` : '');
@@ -414,7 +418,7 @@ export class GemConnector implements IConnector {
 
     const csrf =
       cookieJar['csrf_gem_cookie'] ||
-      html.match(/csrf_bd_gem_nk["']?\s*[:=]\s*["']([a-f0-9]+)["']/i)?.[1] ||
+      html.match(/csrf_bd_gem_nk["']?\s*[:=]\s*["']([a-z0-9_-]+)["']/i)?.[1] ||
       html.match(/name=["']csrf_bd_gem_nk["']\s+value=["']([^"']+)["']/i)?.[1] ||
       '';
 
@@ -434,24 +438,32 @@ export class GemConnector implements IConnector {
   }): Promise<{ docs: GemDoc[]; numFound: number | null }> {
     const { baseUrl, cookieJar, csrf, query, window } = args;
 
+    const filter: Record<string, any> = {
+      bidStatusType: 'ongoing_bids',
+      byType: 'all',
+      highBidValue: '',
+      sort: 'Bid-End-Date-Oldest',
+    };
+
+    /**
+     * Only include byEndDate when the window actually needs it.
+     * Keeping it omitted for ALL is the safest shape.
+     */
+    if (window.fromDays != null && window.toDays != null) {
+      filter.byEndDate = {
+        from: this.formatGemDateDdMmYyyyIST(window.fromDays),
+        to: this.formatGemDateDdMmYyyyIST(window.toDays),
+      };
+    } else {
+      filter.byEndDate = { from: '', to: '' };
+    }
+
     const payloadObj = {
       param: {
         searchBid: query,
         searchType: 'fullText',
       },
-      filter: {
-        bidStatusType: 'ongoing_bids',
-        byType: 'all',
-        highBidValue: '',
-        byEndDate:
-          window.fromDays == null || window.toDays == null
-            ? { from: '', to: '' }
-            : {
-                from: this.formatGemDateDdMmYyyyIST(window.fromDays),
-                to: this.formatGemDateDdMmYyyyIST(window.toDays),
-              },
-        sort: 'Bid-End-Date-Oldest',
-      },
+      filter,
     };
 
     const form = new URLSearchParams();
@@ -496,13 +508,9 @@ export class GemConnector implements IConnector {
   private buildQueryPlan(): string[] {
     const queries: string[] = [];
 
-    // Strong phrases first
     queries.push(...this.strongPhraseQueries);
-
-    // High-signal orgs next
     queries.push(...this.organizationQueries);
 
-    // Add location + service combos for recall
     const comboLocations = [
       'Jharkhand',
       'Uttar Pradesh',
@@ -529,7 +537,6 @@ export class GemConnector implements IConnector {
       }
     }
 
-    // De-dupe, normalize whitespace, trim, and cap.
     const deduped = Array.from(
       new Set(
         queries
@@ -601,11 +608,6 @@ export class GemConnector implements IConnector {
       }
     }
 
-    /**
-     * Noise guard:
-     * if the row only matched weak generic words and nothing else,
-     * do not let it through.
-     */
     const matchedTokens = matched
       .map((m) => m.split(':').slice(1).join(':').trim().toLowerCase())
       .filter(Boolean);
@@ -613,11 +615,9 @@ export class GemConnector implements IConnector {
     const hasStrongContext = matchedTokens.some(
       (t) =>
         !this.weakStandaloneTerms.has(t) &&
-        (
-          this.organizationQueries.some((x) => x.toLowerCase() === t) ||
+        (this.organizationQueries.some((x) => x.toLowerCase() === t) ||
           this.targetLocations.some((x) => x.toLowerCase() === t) ||
-          this.strongIncludeTerms.some((x) => x.toLowerCase() === t)
-        ),
+          this.strongIncludeTerms.some((x) => x.toLowerCase() === t)),
     );
 
     if (!hasStrongContext && matchedTokens.every((t) => this.weakStandaloneTerms.has(t))) {
