@@ -123,6 +123,8 @@ export const workflowApi = {
     apiFetch(`/workflow/tenders/${tenderId}/enter`, { method: 'POST' }),
   get: (tenderId: string) =>
     apiFetch(`/workflow/tenders/${tenderId}`),
+  getTimeline: (tenderId: string) =>
+    apiFetch(`/workflow/tenders/${tenderId}/timeline`),
   updateStage: (tenderId: string, stage: string) =>
     apiFetch(`/workflow/tenders/${tenderId}/stage`, {
       method: 'PATCH',
@@ -179,7 +181,10 @@ export const activityApi = {
 
 export const dashboardApi = {
   me: () => apiFetch('/dashboard/me'),
+  activityFeed: (scope: 'my' | 'all', limit?: number) =>
+    apiFetch(`/dashboard/activity?scope=${scope}&limit=${limit || 20}`),
   adminOverview: () => apiFetch('/dashboard/admin/overview'),
+  adminExtras: () => apiFetch('/dashboard/admin/extras'),
   adminUser: (userId: string) => apiFetch(`/dashboard/admin/users/${userId}`),
 };
 

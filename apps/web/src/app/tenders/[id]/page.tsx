@@ -28,6 +28,72 @@ const STAGE_LABELS: Record<string, { label: string; color: string }> = {
   REJECTED: { label: 'Rejected', color: '#ef4444' },
 };
 
+function StageTimeline({ tenderId }: { tenderId: string }) {
+  const [timeline, setTimeline] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await workflowApi.getTimeline(tenderId);
+        if (res.ok) setTimeline(await res.json());
+      } catch {}
+      finally { setLoading(false); }
+    };
+    load();
+  }, [tenderId]);
+
+  if (loading) return <div className="text-gray-500 text-sm animate-pulse p-4">Loading timeline...</div>;
+  if (!timeline || !timeline.timeline?.length) return <p className="text-gray-500 text-sm p-4">No timeline data yet</p>;
+
+  return (
+    <div className="space-y-0">
+      {timeline.timeline.map((event: any, i: number) => {
+        const isLast = i === timeline.timeline.length - 1;
+        const isRejection = event.actionType === 'TENDER_REJECTED';
+        const stageInfo = STAGE_LABELS[event.toStage || event.stage] || { label: event.stage, color: '#666' };
+        const color = isRejection ? '#ef4444' : stageInfo.color;
+
+        let actionLabel = '';
+        switch (event.actionType) {
+          case 'WORKFLOW_ENTERED': actionLabel = 'Entered workflow'; break;
+          case 'STAGE_CHANGED': actionLabel = `Moved to ${STAGE_LABELS[event.toStage]?.label || event.toStage}`; break;
+          case 'STAGE_COMPLETED': actionLabel = `Completed ${STAGE_LABELS[event.stage]?.label || event.stage}`; break;
+          case 'TENDER_REJECTED': actionLabel = `Rejected at ${STAGE_LABELS[event.stage]?.label || event.stage}`; break;
+          case 'STAGE_ASSIGNED': actionLabel = `Assigned ${STAGE_LABELS[event.stage]?.label || event.stage}`; break;
+          case 'NOTE_ADDED': actionLabel = 'Added a note'; break;
+          default: actionLabel = event.actionType.replace(/_/g, ' ').toLowerCase();
+        }
+
+        return (
+          <div key={event.id} className="flex gap-3">
+            {/* Timeline line + dot */}
+            <div className="flex flex-col items-center">
+              <div className="w-3 h-3 rounded-full border-2 flex-shrink-0 mt-1" style={{ borderColor: color, background: isLast ? color : 'transparent' }} />
+              {!isLast && <div className="w-0.5 flex-1 min-h-[32px]" style={{ background: `${color}30` }} />}
+            </div>
+            {/* Content */}
+            <div className={`pb-4 ${isLast ? '' : ''}`}>
+              <div className="text-sm text-white font-medium">{actionLabel}</div>
+              {event.fromStage && event.toStage && event.actionType === 'STAGE_CHANGED' && (
+                <div className="text-xs text-gray-500">
+                  {STAGE_LABELS[event.fromStage]?.label || event.fromStage} → {STAGE_LABELS[event.toStage]?.label || event.toStage}
+                </div>
+              )}
+              {isRejection && event.metadata?.rejectionReason && (
+                <div className="text-xs text-red-400 mt-0.5">Reason: {event.metadata.rejectionReason}</div>
+              )}
+              <div className="text-xs text-gray-600 mt-0.5">
+                {event.performedBy?.fullName || event.performedBy?.email || 'System'} · {new Date(event.timestamp).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TenderDetailPage() {
   const router = useRouter();
   const params = useParams();
@@ -43,33 +109,26 @@ export default function TenderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Form states
   const [newNote, setNewNote] = useState('');
   const [selectedStage, setSelectedStage] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [rejectStage, setRejectStage] = useState('');
   const [showReject, setShowReject] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-
-  // Stage assignment form
   const [assignStage, setAssignStage] = useState('');
   const [assignUserId, setAssignUserId] = useState('');
 
   const loadData = useCallback(async () => {
     try {
-      // Try to get workflow (includes tender data)
       const wfRes = await workflowApi.get(tenderId).catch(() => null);
       if (wfRes && wfRes.ok) {
         const wfData = await wfRes.json();
         setWorkflow(wfData);
         setTender(wfData.tender);
       } else {
-        // Tender not in workflow — try loading tender directly from search
-        // We fetch a search with empty query and match by ID
         setWorkflow(null);
       }
 
-      // Load stages, notes, activity, users
       const [stagesRes, notesRes, actRes, usersRes] = await Promise.all([
         stageApi.getStages(tenderId).catch(() => null),
         notesApi.list(tenderId).catch(() => null),
@@ -98,7 +157,7 @@ export default function TenderDetailPage() {
     try {
       const res = await workflowApi.enter(tenderId);
       if (res.ok) await loadData();
-      else { const e = await res.json().catch(() => ({})); setError(e.message || 'Failed to enter workflow'); }
+      else { const e = await res.json().catch(() => ({})); setError(e.message || 'Failed'); }
     } catch (e: any) { setError(e.message); }
     finally { setActionLoading(false); }
   };
@@ -141,17 +200,13 @@ export default function TenderDetailPage() {
     try {
       const res = await stageApi.assign(tenderId, assignStage, assignUserId);
       if (res.ok) { setAssignStage(''); setAssignUserId(''); await loadData(); }
-      else { const e = await res.json(); setError(e.message || 'Failed to assign'); }
+      else { const e = await res.json(); setError(e.message || 'Failed'); }
     } catch (e: any) { setError(e.message); }
     finally { setActionLoading(false); }
   };
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <div className="text-cyan-400 animate-pulse">Loading tender details...</div>
-      </div>
-    );
+    return <div className="min-h-screen bg-gray-950 flex items-center justify-center"><div className="text-cyan-400 animate-pulse">Loading tender details...</div></div>;
   }
 
   const currentStage = workflow?.currentStage;
@@ -162,17 +217,14 @@ export default function TenderDetailPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <Sidebar />
       <main className="ml-64 p-8">
-        {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
           <button onClick={() => router.back()} className="hover:text-white transition">← Back</button>
-          <span>/</span>
-          <span className="text-gray-400">Tender Detail</span>
+          <span>/</span><span className="text-gray-400">Tender Detail</span>
         </div>
 
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
-            {error}
-            <button onClick={() => setError('')} className="ml-3 text-red-300">×</button>
+            {error}<button onClick={() => setError('')} className="ml-3 text-red-300">×</button>
           </div>
         )}
 
@@ -182,117 +234,55 @@ export default function TenderDetailPage() {
             <div className="flex-1">
               <h1 className="text-2xl font-bold mb-2">{tender?.title || 'Tender'}</h1>
               <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-400 mt-2">
-                {tender?.organization && (
-                  <div>
-                    <span className="text-gray-600">Org:</span> <span className="text-gray-300">{tender.organization}</span>
-                  </div>
-                )}
-                {tender?.sourceSite?.name && (
-                  <div>
-                    <span className="text-gray-600">Source:</span> <span className="text-gray-300">{tender.sourceSite.name}</span>
-                  </div>
-                )}
-                {tender?.deadlineAt && (
-                  <div>
-                    <span className="text-gray-600">Deadline:</span>{' '}
-                    <span className="text-gray-300">{new Date(tender.deadlineAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                  </div>
-                )}
-                {tender?.publishedAt && (
-                  <div>
-                    <span className="text-gray-600">Published:</span>{' '}
-                    <span className="text-gray-300">{new Date(tender.publishedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
-                  </div>
-                )}
-                {tender?.location && (
-                  <div>
-                    <span className="text-gray-600">Location:</span> <span className="text-gray-300">{tender.location}</span>
-                  </div>
-                )}
-                {tender?.estimatedValue && (
-                  <div>
-                    <span className="text-gray-600">Est. Value:</span> <span className="text-gray-300">{tender.estimatedValue}</span>
-                  </div>
-                )}
-                {tender?.status && (
-                  <div>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${
-                      tender.status === 'OPEN' ? 'bg-green-500/20 text-green-400' :
-                      tender.status === 'CLOSED' ? 'bg-red-500/20 text-red-400' :
-                      'bg-gray-500/20 text-gray-400'
-                    }`}>{tender.status}</span>
-                  </div>
-                )}
+                {tender?.organization && <div><span className="text-gray-600">Org:</span> <span className="text-gray-300">{tender.organization}</span></div>}
+                {tender?.sourceSite?.name && <div><span className="text-gray-600">Source:</span> <span className="text-gray-300">{tender.sourceSite.name}</span></div>}
+                {tender?.deadlineAt && <div><span className="text-gray-600">Deadline:</span> <span className="text-gray-300">{new Date(tender.deadlineAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>}
+                {tender?.publishedAt && <div><span className="text-gray-600">Published:</span> <span className="text-gray-300">{new Date(tender.publishedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>}
+                {tender?.location && <div><span className="text-gray-600">Location:</span> <span className="text-gray-300">{tender.location}</span></div>}
+                {tender?.estimatedValue && <div><span className="text-gray-600">Est. Value:</span> <span className="text-gray-300">{tender.estimatedValue}</span></div>}
+                {tender?.status && <span className={`text-xs px-2 py-0.5 rounded-full ${tender.status === 'OPEN' ? 'bg-green-500/20 text-green-400' : tender.status === 'CLOSED' ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400'}`}>{tender.status}</span>}
               </div>
-              {/* Summary */}
-              {tender?.summary && (
-                <div className="mt-3 text-sm text-gray-500 leading-relaxed">{tender.summary}</div>
-              )}
-              {/* Source link */}
+              {tender?.summary && <div className="mt-3 text-sm text-gray-500 leading-relaxed">{tender.summary}</div>}
               {tender?.sourceUrl && (
-                <a
-                  href={tender.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 mt-3 text-xs text-cyan-400 hover:text-cyan-300 transition"
-                >
-                  View on source portal
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
+                <a href={tender.sourceUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 mt-3 text-xs text-cyan-400 hover:text-cyan-300 transition">
+                  View on source portal <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
                 </a>
               )}
             </div>
             {workflow ? (
-              <div className="flex items-center gap-3 flex-shrink-0 ml-4">
-                <div
-                  className="px-4 py-2 rounded-xl text-sm font-semibold"
-                  style={{ background: `${currentInfo.color}20`, color: currentInfo.color }}
-                >
-                  {isRejected ? '❌ REJECTED' : currentInfo.label}
-                </div>
+              <div className="px-4 py-2 rounded-xl text-sm font-semibold flex-shrink-0 ml-4" style={{ background: `${currentInfo.color}20`, color: currentInfo.color }}>
+                {isRejected ? '❌ REJECTED' : currentInfo.label}
               </div>
             ) : (
-              <button onClick={enterWorkflow} disabled={actionLoading} className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-gray-950 font-semibold rounded-xl transition disabled:opacity-50 flex-shrink-0 ml-4">
-                Enter Workflow
-              </button>
+              <button onClick={enterWorkflow} disabled={actionLoading} className="px-5 py-2.5 bg-cyan-500 hover:bg-cyan-400 text-gray-950 font-semibold rounded-xl transition disabled:opacity-50 flex-shrink-0 ml-4">Enter Workflow</button>
             )}
           </div>
 
-          {/* Stage Pipeline Visual */}
+          {/* Stage Progress Bar */}
           {workflow && !isRejected && (
             <div className="mt-6 flex items-center gap-1">
               {STAGES.map((stage, i) => {
-                const info = STAGE_LABELS[stage];
-                const isActive = stage === currentStage;
-                const isPast = STAGES.indexOf(currentStage) > i;
+                const info = STAGE_LABELS[stage]; const isActive = stage === currentStage; const isPast = STAGES.indexOf(currentStage) > i;
                 return (
                   <div key={stage} className="flex-1 relative group">
-                    <div
-                      className={`h-2 rounded-full transition-all ${isActive ? 'scale-y-150' : ''}`}
-                      style={{
-                        background: isPast || isActive ? info.color : 'rgba(255,255,255,0.1)',
-                        opacity: isPast ? 0.5 : 1,
-                      }}
-                    />
-                    <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] text-gray-500 opacity-0 group-hover:opacity-100 transition whitespace-nowrap">
-                      {info.label}
-                    </div>
+                    <div className={`h-2 rounded-full transition-all ${isActive ? 'scale-y-150' : ''}`} style={{ background: isPast || isActive ? info.color : 'rgba(255,255,255,0.1)', opacity: isPast ? 0.5 : 1 }} />
+                    <div className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[9px] text-gray-500 opacity-0 group-hover:opacity-100 transition whitespace-nowrap">{info.label}</div>
                   </div>
                 );
               })}
             </div>
           )}
 
-          {/* Rejection info */}
+          {/* Rejection Banner */}
           {isRejected && (
             <div className="mt-4 p-4 rounded-xl bg-red-500/10 border border-red-500/20">
-              <div className="text-sm text-red-400">
-                <strong>Reason:</strong> {workflow.rejectionReason}
-              </div>
-              <div className="text-sm text-red-400/70 mt-1">
-                Failed at: {STAGE_LABELS[workflow.failedAtStage]?.label || workflow.failedAtStage}
-              </div>
+              <div className="text-sm text-red-400"><strong>Reason:</strong> {workflow.rejectionReason}</div>
+              <div className="text-sm text-red-400/70 mt-1">Failed at: {STAGE_LABELS[workflow.failedAtStage]?.label || workflow.failedAtStage}</div>
+              {workflow.rejectedBy && (
+                <div className="text-sm text-red-400/70 mt-1">
+                  Rejected by: <strong>{workflow.rejectedBy.fullName || workflow.rejectedBy.email}</strong> on {new Date(workflow.rejectedBy.rejectedAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -300,87 +290,46 @@ export default function TenderDetailPage() {
         {/* Actions Panel */}
         {workflow && !isRejected && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-            {/* Move Stage */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Move Stage</h3>
               <div className="flex gap-2">
-                <select
-                  value={selectedStage}
-                  onChange={(e) => setSelectedStage(e.target.value)}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
-                >
+                <select value={selectedStage} onChange={(e) => setSelectedStage(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
                   <option value="">Select stage...</option>
-                  {STAGES.filter((s) => s !== currentStage).map((s) => (
-                    <option key={s} value={s}>{STAGE_LABELS[s].label}</option>
-                  ))}
+                  {STAGES.filter(s => s !== currentStage).map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
                 </select>
-                <button onClick={moveStage} disabled={!selectedStage || actionLoading}
-                  className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">
-                  Move
-                </button>
+                <button onClick={moveStage} disabled={!selectedStage || actionLoading} className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">Move</button>
               </div>
             </div>
-
-            {/* Assign Stage to User */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Assign Stage</h3>
               <div className="space-y-2">
-                <select
-                  value={assignStage}
-                  onChange={(e) => setAssignStage(e.target.value)}
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
-                >
+                <select value={assignStage} onChange={(e) => setAssignStage(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
                   <option value="">Select stage...</option>
-                  {STAGES.map((s) => (
-                    <option key={s} value={s}>{STAGE_LABELS[s].label}</option>
-                  ))}
+                  {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
                 </select>
                 <div className="flex gap-2">
-                  <select
-                    value={assignUserId}
-                    onChange={(e) => setAssignUserId(e.target.value)}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
-                  >
+                  <select value={assignUserId} onChange={(e) => setAssignUserId(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
                     <option value="">Select user...</option>
-                    {allUsers.filter((u: any) => u.isActive).map((u: any) => (
-                      <option key={u.id} value={u.id}>
-                        {u.profile?.fullName || u.email}
-                      </option>
-                    ))}
+                    {allUsers.filter((u: any) => u.isActive).map((u: any) => <option key={u.id} value={u.id}>{u.profile?.fullName || u.email}</option>)}
                   </select>
-                  <button onClick={handleAssignStage} disabled={!assignStage || !assignUserId || actionLoading}
-                    className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">
-                    Assign
-                  </button>
+                  <button onClick={handleAssignStage} disabled={!assignStage || !assignUserId || actionLoading} className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">Assign</button>
                 </div>
               </div>
             </div>
-
-            {/* Reject */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Reject Tender</h3>
               {!showReject ? (
-                <button onClick={() => setShowReject(true)} className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 transition">
-                  Reject...
-                </button>
+                <button onClick={() => setShowReject(true)} className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 transition">Reject...</button>
               ) : (
                 <div className="space-y-2">
-                  <select value={rejectStage} onChange={(e) => setRejectStage(e.target.value)}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none">
+                  <select value={rejectStage} onChange={(e) => setRejectStage(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none">
                     <option value="">Failed at stage...</option>
-                    {STAGES.map((s) => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
+                    {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
                   </select>
-                  <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)}
-                    placeholder="Rejection reason..."
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none resize-none h-16" />
+                  <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejection reason..." className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none resize-none h-16" />
                   <div className="flex gap-2">
-                    <button onClick={rejectTender} disabled={!rejectReason || !rejectStage || actionLoading}
-                      className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 disabled:opacity-50 transition">
-                      Confirm Reject
-                    </button>
-                    <button onClick={() => setShowReject(false)} className="px-4 py-2 text-gray-400 text-sm">
-                      Cancel
-                    </button>
+                    <button onClick={rejectTender} disabled={!rejectReason || !rejectStage || actionLoading} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 disabled:opacity-50 transition">Confirm Reject</button>
+                    <button onClick={() => setShowReject(false)} className="px-4 py-2 text-gray-400 text-sm">Cancel</button>
                   </div>
                 </div>
               )}
@@ -388,11 +337,20 @@ export default function TenderDetailPage() {
           </div>
         )}
 
-        {/* Tabs: Assignments / Notes / Activity */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ── Stage Timeline + Assignments + Notes + Activity ── */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+          {/* Visual Stage Timeline (NEW) */}
+          <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+            <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
+              <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" /></svg>
+              Stage Timeline
+            </h3>
+            {workflow ? <StageTimeline tenderId={tenderId} /> : <p className="text-gray-500 text-sm">Enter workflow to see timeline</p>}
+          </div>
+
           {/* Stage Assignments */}
           <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
-            <h3 className="text-white font-semibold mb-4">Stage Assignments</h3>
+            <h3 className="text-white font-semibold mb-4">Assignments</h3>
             <div className="space-y-2 max-h-[400px] overflow-y-auto">
               {(Array.isArray(stages) ? stages : []).map((a: any) => {
                 const info = STAGE_LABELS[a.stage] || { label: a.stage, color: '#666' };
@@ -401,29 +359,15 @@ export default function TenderDetailPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <div className="w-2 h-2 rounded-full" style={{ background: info.color }} />
                       <span className="text-sm font-medium">{info.label}</span>
-                      <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${
-                        a.assignmentStatus === 'COMPLETED' ? 'bg-green-500/20 text-green-400' :
-                        a.assignmentStatus === 'IN_PROGRESS' ? 'bg-yellow-500/20 text-yellow-400' :
-                        a.assignmentStatus === 'REASSIGNED' ? 'bg-orange-500/20 text-orange-400' :
-                        'bg-white/10 text-gray-400'
-                      }`}>{a.assignmentStatus}</span>
+                      <span className={`ml-auto text-xs px-2 py-0.5 rounded-full ${a.assignmentStatus === 'COMPLETED' ? 'bg-green-500/20 text-green-400' : a.assignmentStatus === 'IN_PROGRESS' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-white/10 text-gray-400'}`}>{a.assignmentStatus}</span>
                     </div>
-                    <div className="text-xs text-gray-500">
-                      Assigned to: {a.assignedTo?.profile?.fullName || a.assignedTo?.email || 'Unknown'}
-                    </div>
-                    {a.assignedBy && (
-                      <div className="text-xs text-gray-600">
-                        By: {a.assignedBy?.email}
-                      </div>
-                    )}
+                    <div className="text-xs text-gray-500">Assigned to: {a.assignedTo?.profile?.fullName || a.assignedTo?.email || 'Unknown'}</div>
+                    {a.assignedBy && <div className="text-xs text-gray-600">By: {a.assignedBy?.email}</div>}
                   </div>
                 );
               })}
               {(Array.isArray(stages) ? stages : []).length === 0 && (
-                <div className="text-center py-4">
-                  <p className="text-gray-500 text-sm">No assignments yet</p>
-                  {workflow && <p className="text-gray-600 text-xs mt-1">Use the &quot;Assign Stage&quot; panel above</p>}
-                </div>
+                <div className="text-center py-4"><p className="text-gray-500 text-sm">No assignments yet</p></div>
               )}
             </div>
           </div>
@@ -435,23 +379,14 @@ export default function TenderDetailPage() {
               {notes.map((n: any) => (
                 <div key={n.id} className="p-3 rounded-lg bg-white/5">
                   <div className="text-sm text-gray-300">{n.noteText}</div>
-                  <div className="text-xs text-gray-600 mt-1">
-                    {n.user?.profile?.fullName || n.user?.email} ·{' '}
-                    {new Date(n.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                  </div>
+                  <div className="text-xs text-gray-600 mt-1">{n.user?.profile?.fullName || n.user?.email} · {new Date(n.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
                 </div>
               ))}
               {notes.length === 0 && <p className="text-gray-500 text-sm">No notes yet</p>}
             </div>
             <div className="flex gap-2">
-              <input value={newNote} onChange={(e) => setNewNote(e.target.value)}
-                placeholder="Add a note..."
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none"
-                onKeyDown={(e) => e.key === 'Enter' && addNote()} />
-              <button onClick={addNote} disabled={!newNote.trim() || actionLoading}
-                className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm disabled:opacity-50">
-                Add
-              </button>
+              <input value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Add a note..." className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none" onKeyDown={(e) => e.key === 'Enter' && addNote()} />
+              <button onClick={addNote} disabled={!newNote.trim() || actionLoading} className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm disabled:opacity-50">Add</button>
             </div>
           </div>
 
@@ -461,19 +396,12 @@ export default function TenderDetailPage() {
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
               {activity.map((a: any) => (
                 <div key={a.id} className="flex items-start gap-2 text-sm">
-                  <div className="w-1.5 h-1.5 rounded-full bg-cyan-500 mt-2 flex-shrink-0" />
+                  <div className={`w-1.5 h-1.5 rounded-full mt-2 flex-shrink-0 ${a.actionType === 'TENDER_REJECTED' ? 'bg-red-500' : 'bg-cyan-500'}`} />
                   <div>
                     <span className="text-gray-300">{a.actionType.replace(/_/g, ' ').toLowerCase()}</span>
                     {a.stage && <span className="text-gray-500 ml-1">({STAGE_LABELS[a.stage]?.label || a.stage})</span>}
-                    {a.fromValue && a.toValue && (
-                      <div className="text-xs text-gray-600">
-                        {String(a.fromValue).replace(/_/g, ' ')} → {String(a.toValue).replace(/_/g, ' ')}
-                      </div>
-                    )}
-                    <div className="text-xs text-gray-600 mt-0.5">
-                      {a.user?.profile?.fullName || a.user?.email} ·{' '}
-                      {new Date(a.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                    </div>
+                    {a.fromValue && a.toValue && <div className="text-xs text-gray-600">{String(a.fromValue).replace(/_/g, ' ')} → {String(a.toValue).replace(/_/g, ' ')}</div>}
+                    <div className="text-xs text-gray-600 mt-0.5">{a.user?.profile?.fullName || a.user?.email} · {new Date(a.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
                   </div>
                 </div>
               ))}

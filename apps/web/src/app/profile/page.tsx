@@ -27,7 +27,7 @@ export default function ProfilePage() {
 
   const loadProfile = async () => {
     try {
-      const res = await apiFetch('/auth/profile');
+      const res = await apiFetch('/auth/profile/me');
       if (res.ok) {
         const data = await res.json();
         setFullName(data.fullName || '');
@@ -47,8 +47,8 @@ export default function ProfilePage() {
     setSuccess('');
 
     try {
-      const res = await apiFetch('/auth/profile', {
-        method: 'PUT',
+      const res = await apiFetch('/auth/profile/me', {
+        method: 'PATCH',
         body: JSON.stringify({ fullName, designation, teamName }),
       });
 
