@@ -4,6 +4,10 @@ RUN npm install -g pnpm@9
 WORKDIR /app
 COPY . .
 RUN pnpm install --no-frozen-lockfile
+
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
 RUN cd apps/web && pnpm build
 
 EXPOSE 3000
