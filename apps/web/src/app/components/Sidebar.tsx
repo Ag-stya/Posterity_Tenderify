@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { path: '/tenders/add-external', label: 'Add Tender', icon: 'M12 4v16m8-8H4' },
   { path: '/my-stage-work', label: 'My Work', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
   { path: '/my-activity', label: 'Activity', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+  { path: '/profile', label: 'My Profile', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
 ];
 
 const ADMIN_ITEMS = [
@@ -34,7 +35,7 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-gray-950 text-white flex flex-col z-40">
-      {/* Logo — clickable, goes to dashboard */}
+      {/* Logo */}
       <div
         className="px-5 py-5 border-b border-white/10 cursor-pointer hover:bg-white/5 transition-colors"
         onClick={() => router.push('/dashboard')}
@@ -109,7 +110,11 @@ export default function Sidebar() {
       {/* User */}
       <div className="px-4 py-4 border-t border-white/10">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 min-w-0">
+          <div
+            className="flex items-center gap-2 min-w-0 cursor-pointer hover:opacity-80 transition"
+            onClick={() => router.push('/profile')}
+            title="Edit profile"
+          >
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-xs font-bold flex-shrink-0">
               {user?.email?.[0]?.toUpperCase() || '?'}
             </div>

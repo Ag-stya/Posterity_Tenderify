@@ -15,6 +15,7 @@ export class SearchController {
     @Query('publishedTo') publishedTo?: string,
     @Query('closingSoonDays') closingSoonDays?: string,
     @Query('location') location?: string,
+    @Query('sort') sort?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
@@ -25,6 +26,7 @@ export class SearchController {
       publishedTo,
       closingSoonDays: closingSoonDays ? parseInt(closingSoonDays, 10) : undefined,
       location,
+      sort: sort as 'relevance' | 'deadline' | 'published' | undefined,
       page: parseInt(page || '1', 10),
       pageSize: Math.min(parseInt(pageSize || '20', 10), 50),
     });

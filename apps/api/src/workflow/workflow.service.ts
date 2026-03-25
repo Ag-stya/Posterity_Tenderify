@@ -40,7 +40,6 @@ export class WorkflowService {
       throw new BadRequestException('Title is required');
     }
 
-    // Find or create a "Manual Entry" source site
     let manualSite = await this.prisma.sourceSite.findUnique({
       where: { key: 'MANUAL_ENTRY' },
     });
@@ -52,14 +51,13 @@ export class WorkflowService {
           name: 'Manual Entry',
           baseUrl: 'https://tenderwatch.internal',
           type: 'CUSTOM_HTML',
-          enabled: false, // Not crawled
+          enabled: false,
           crawlIntervalMinutes: 9999,
           rateLimitPerMinute: 1,
         },
       });
     }
 
-    // Build a unique source URL for manual entries
     const uniqueUrl = data.sourceUrl?.trim() ||
       `manual://${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
 
@@ -69,7 +67,6 @@ export class WorkflowService {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Transaction: create tender + enter workflow + log activity
     const result = await this.prisma.$transaction(async (tx) => {
       const tender = await tx.tender.create({
         data: {
@@ -164,7 +161,7 @@ export class WorkflowService {
   }
 
   /**
-   * Get workflow details for a tender
+   * Get workflow details for a tender — includes rejection info with who/when
    */
   async getWorkflow(tenderId: string) {
     const workflow = await this.prisma.tenderWorkflow.findUnique({
@@ -175,12 +172,129 @@ export class WorkflowService {
             sourceSite: { select: { id: true, name: true, key: true } },
           },
         },
-        lastUpdatedBy: { select: { id: true, email: true } },
+        lastUpdatedBy: {
+          select: {
+            id: true,
+            email: true,
+            profile: { select: { fullName: true } },
+          },
+        },
       },
     });
 
     if (!workflow) throw new NotFoundException('Tender not in workflow');
-    return workflow;
+
+    // If rejected, fetch the rejection activity log for who/when
+    let rejectedBy: { email: string; fullName: string | null; rejectedAt: Date } | null = null;
+    if (workflow.isRejected) {
+      const rejectionLog = await this.prisma.tenderActivityLog.findFirst({
+        where: {
+          tenderId,
+          actionType: 'TENDER_REJECTED',
+        },
+        include: {
+          user: {
+            select: {
+              email: true,
+              profile: { select: { fullName: true } },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (rejectionLog) {
+        rejectedBy = {
+          email: rejectionLog.user.email,
+          fullName: rejectionLog.user.profile?.fullName || null,
+          rejectedAt: rejectionLog.createdAt,
+        };
+      }
+    }
+
+    return {
+      ...workflow,
+      rejectedBy,
+    };
+  }
+
+  /**
+   * Get full stage timeline for a tender — all transitions with who/when
+   */
+  async getStageTimeline(tenderId: string) {
+    const workflow = await this.prisma.tenderWorkflow.findUnique({
+      where: { tenderId },
+    });
+    if (!workflow) throw new NotFoundException('Tender not in workflow');
+
+    const logs = await this.prisma.tenderActivityLog.findMany({
+      where: {
+        tenderId,
+        actionType: {
+          in: ['WORKFLOW_ENTERED', 'STAGE_CHANGED', 'STAGE_COMPLETED', 'TENDER_REJECTED', 'STAGE_ASSIGNED', 'NOTE_ADDED'],
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            email: true,
+            profile: { select: { fullName: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Also get stage assignments for richer timeline
+    const assignments = await this.prisma.tenderStageAssignment.findMany({
+      where: { tenderId },
+      include: {
+        assignedTo: {
+          select: {
+            id: true,
+            email: true,
+            profile: { select: { fullName: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+      tenderId,
+      currentStage: workflow.currentStage,
+      isRejected: workflow.isRejected,
+      rejectionReason: workflow.rejectionReason,
+      failedAtStage: workflow.failedAtStage,
+      enteredAt: workflow.createdAt,
+      timeline: logs.map((log) => ({
+        id: log.id,
+        actionType: log.actionType,
+        stage: log.stage,
+        fromStage: log.fromValue,
+        toStage: log.toValue,
+        performedBy: {
+          id: log.user.id,
+          email: log.user.email,
+          fullName: log.user.profile?.fullName || null,
+        },
+        metadata: log.metadataJson,
+        timestamp: log.createdAt,
+      })),
+      assignments: assignments.map((a) => ({
+        id: a.id,
+        stage: a.stage,
+        status: a.assignmentStatus,
+        assignedTo: {
+          id: a.assignedTo.id,
+          email: a.assignedTo.email,
+          fullName: a.assignedTo.profile?.fullName || null,
+        },
+        assignedAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      })),
+    };
   }
 
   /**
@@ -356,7 +470,13 @@ export class WorkflowService {
               sourceSite: { select: { name: true } },
             },
           },
-          lastUpdatedBy: { select: { id: true, email: true } },
+          lastUpdatedBy: {
+            select: {
+              id: true,
+              email: true,
+              profile: { select: { fullName: true } },
+            },
+          },
         },
         orderBy: { lastUpdatedAt: 'desc' },
         skip: (page - 1) * pageSize,

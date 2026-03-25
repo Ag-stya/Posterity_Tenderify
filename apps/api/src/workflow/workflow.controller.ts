@@ -48,6 +48,14 @@ export class WorkflowController {
     return this.workflow.getWorkflow(tenderId);
   }
 
+  /**
+   * Stage timeline — full audit trail of all transitions with who/when
+   */
+  @Get('tenders/:tenderId/timeline')
+  async getStageTimeline(@Param('tenderId') tenderId: string) {
+    return this.workflow.getStageTimeline(tenderId);
+  }
+
   @Patch('tenders/:tenderId/stage')
   async updateStage(
     @Param('tenderId') tenderId: string,

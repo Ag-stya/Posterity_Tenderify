@@ -93,6 +93,12 @@ export class CrawlProcessor extends WorkerHost {
           const normalized = connector.parseDetail(raw, canonicalDetailUrl, siteConfig);
           if (!normalized) continue;
 
+          // Central expiry normalization so expired tenders are not kept OPEN
+          const now = new Date();
+          if (normalized.deadlineAt && normalized.deadlineAt < now) {
+            normalized.status = 'CLOSED';
+          }
+
           normalized.sourceUrl = normalized.sourceUrl?.startsWith('http')
             ? normalized.sourceUrl
             : new URL(normalized.sourceUrl || canonicalDetailUrl, site.baseUrl).toString();

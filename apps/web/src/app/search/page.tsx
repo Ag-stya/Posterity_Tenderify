@@ -22,6 +22,8 @@ interface TenderResult {
   sourceUrl: string;
   status: string;
   score?: number;
+  isRejected?: boolean;
+  rejectionInfo?: { rejectedBy: string; reason: string; failedAtStage: string } | null;
   alsoSeenOn: Array<{ sourceSite: { name: string }; sourceUrl: string }>;
 }
 
@@ -64,6 +66,7 @@ export default function SearchPage() {
   const [searching, setSearching] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [sortBy, setSortBy] = useState<string>('relevance');
 
   const [workflowMap, setWorkflowMap] = useState<Record<string, { currentStage: string; isRejected: boolean }>>({});
 
@@ -124,6 +127,7 @@ export default function SearchPage() {
       if (publishedTo) params.set('publishedTo', publishedTo);
       if (closingSoonDays) params.set('closingSoonDays', closingSoonDays);
       if (location.trim()) params.set('location', location.trim());
+      if (sortBy !== 'relevance') params.set('sort', sortBy);
       params.set('page', String(p));
       params.set('pageSize', String(pageSize));
 
@@ -145,7 +149,7 @@ export default function SearchPage() {
       setSearching(false);
       setInitialLoad(false);
     }
-  }, [query, selectedSites, publishedFrom, publishedTo, closingSoonDays, location, pageSize, fetchWorkflowOverlay]);
+  }, [query, selectedSites, publishedFrom, publishedTo, closingSoonDays, location, sortBy, pageSize, fetchWorkflowOverlay]);
 
   useEffect(() => { doSearch(1); }, []); // eslint-disable-line
 
@@ -161,6 +165,7 @@ export default function SearchPage() {
       if (publishedTo) params.set('publishedTo', publishedTo);
       if (closingSoonDays) params.set('closingSoonDays', closingSoonDays);
       if (location.trim()) params.set('location', location.trim());
+      if (sortBy !== 'relevance') params.set('sort', sortBy);
       params.set('page', '1');
       params.set('pageSize', '500');
 
@@ -328,21 +333,29 @@ export default function SearchPage() {
           </div>
         )}
 
-        {/* Results count + Export */}
+        {/* Results count + Sort + Export */}
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm text-gray-500">
             {initialLoad ? 'Loading...' : `${total} tenders found`}
             {query && <span className="text-gray-600"> for &quot;{query}&quot;</span>}
           </p>
-          {total > 0 && (
-            <button onClick={handleExportCSV} disabled={exporting}
-              className="flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg text-xs font-medium hover:bg-green-500/20 transition disabled:opacity-50">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              {exporting ? 'Exporting...' : `Export CSV (${Math.min(total, 500)})`}
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            <select value={sortBy} onChange={(e) => { setSortBy(e.target.value); setTimeout(() => doSearch(1), 0); }}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-400 focus:border-cyan-500 focus:outline-none">
+              <option value="relevance" className="bg-gray-900">Sort: Relevance</option>
+              <option value="deadline" className="bg-gray-900">Sort: Deadline (soonest)</option>
+              <option value="published" className="bg-gray-900">Sort: Published (newest)</option>
+            </select>
+            {total > 0 && (
+              <button onClick={handleExportCSV} disabled={exporting}
+                className="flex items-center gap-2 px-3 py-1.5 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg text-xs font-medium hover:bg-green-500/20 transition disabled:opacity-50">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                {exporting ? 'Exporting...' : `Export CSV (${Math.min(total, 500)})`}
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Results Table */}
@@ -366,12 +379,23 @@ export default function SearchPage() {
                 {results.map((tender) => {
                   const wf = workflowMap[tender.id];
                   const stageInfo = wf ? STAGE_LABELS[wf.currentStage] : null;
+                  const rejected = tender.isRejected || wf?.isRejected;
+
                   return (
-                    <tr key={tender.id} className="hover:bg-white/5 transition-colors">
+                    <tr key={tender.id} className={`hover:bg-white/5 transition-colors ${rejected ? 'opacity-50' : ''}`}>
                       <td className="px-4 py-3 max-w-xs">
                         <span onClick={() => router.push(`/tenders/${tender.id}`)}
-                          className="text-cyan-400 hover:text-cyan-300 font-medium hover:underline line-clamp-2 cursor-pointer">{tender.title}</span>
+                          className={`text-cyan-400 hover:text-cyan-300 font-medium hover:underline line-clamp-2 cursor-pointer ${rejected ? 'line-through decoration-red-500/50' : ''}`}>
+                          {tender.title}
+                        </span>
                         <span className={`ml-2 text-xs px-1.5 py-0.5 rounded-full font-medium ${tender.status === 'OPEN' ? 'bg-green-500/20 text-green-400' : tender.status === 'CLOSED' ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400'}`}>{tender.status}</span>
+                        {rejected && (
+                          <div className="mt-1">
+                            <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-medium">
+                              Rejected{tender.rejectionInfo?.rejectedBy ? ` by ${tender.rejectionInfo.rejectedBy}` : ''}
+                            </span>
+                          </div>
+                        )}
                         {tender.alsoSeenOn.length > 0 && (
                           <div className="mt-1 text-xs text-gray-600">Also on: {tender.alsoSeenOn.map((dup, i) => (
                             <span key={i}><a href={dup.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-gray-500 hover:text-cyan-400 underline">{dup.sourceSite.name}</a>{i < tender.alsoSeenOn.length - 1 && ', '}</span>
@@ -388,12 +412,17 @@ export default function SearchPage() {
                       <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{tender.estimatedValue || '—'}</td>
                       <td className="px-4 py-3"><span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-white/5 text-gray-400 border border-white/10">{tender.sourceSite.name}</span></td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        {wf ? (
+                        {rejected ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-500/20 text-red-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                            Rejected
+                          </span>
+                        ) : wf ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium cursor-pointer hover:brightness-110 transition"
                             style={{ background: `${stageInfo?.color || '#666'}20`, color: stageInfo?.color || '#666' }}
                             onClick={() => router.push(`/tenders/${tender.id}`)} title="Click to view workflow">
                             <span className="w-1.5 h-1.5 rounded-full" style={{ background: stageInfo?.color || '#666' }} />
-                            {wf.isRejected ? 'Rejected' : stageInfo?.label || wf.currentStage}
+                            {stageInfo?.label || wf.currentStage}
                           </span>
                         ) : <span className="text-xs text-gray-600">—</span>}
                       </td>
