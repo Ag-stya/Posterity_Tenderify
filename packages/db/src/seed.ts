@@ -6,7 +6,6 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding TenderWatch-Live...');
 
-  // ── 1. Seed Users ──
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@local';
   const adminPass = process.env.ADMIN_PASSWORD || 'admin123';
   const bdEmail = process.env.BD_EMAIL || 'bd@local';
@@ -29,7 +28,6 @@ async function main() {
   });
   console.log(`  ✅ BD user: ${bdEmail}`);
 
-  // ── 2. Seed Source Sites ──
   const sites: Array<{
     key: string;
     name: string;
@@ -37,18 +35,94 @@ async function main() {
     type: SiteType;
     enabled: boolean;
   }> = [
-    // Keep defaults here. You will control enabled/baseUrl/type via DB updates.
+    {
+      key: 'bihar_nic',
+      name: 'Bihar NIC eProc',
+      baseUrl: 'https://eproc.bihar.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: false,
+    },
+    {
+      key: 'cg_nic',
+      name: 'Chhattisgarh NIC eProc',
+      baseUrl: 'https://eproc.cgstate.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: false,
+    },
     {
       key: 'cppp',
       name: 'Central Public Procurement Portal (CPPP)',
       baseUrl: 'https://eprocure.gov.in/eprocure/app',
       type: SiteType.CPPP,
+      enabled: true,
+    },
+    {
+      key: 'gem',
+      name: 'GeM Bid Listing',
+      baseUrl: 'https://bidplus.gem.gov.in/all-bids',
+      type: SiteType.GEM,
+      enabled: true,
+    },
+    {
+      key: 'ireps',
+      name: 'Indian Railways IREPS',
+      baseUrl: 'https://www.ireps.gov.in',
+      type: SiteType.IREPS,
       enabled: false,
     },
     {
       key: 'jharkhand_nic',
       name: 'Jharkhand NIC eProc',
       baseUrl: 'https://jharkhandtenders.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: true,
+    },
+    {
+      key: 'karnataka_nic',
+      name: 'Karnataka NIC eProc',
+      baseUrl: 'https://eproc.karnataka.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: false,
+    },
+    {
+      key: 'maha_nic',
+      name: 'Maharashtra NIC eProc',
+      baseUrl: 'https://mahatenders.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: true,
+    },
+    {
+      key: 'mp_nic',
+      name: 'Madhya Pradesh NIC eProc',
+      baseUrl: 'https://mptenders.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: true,
+    },
+    {
+      key: 'nprocure',
+      name: 'nProcure eProcurement',
+      baseUrl: 'https://tender.nprocure.com',
+      type: SiteType.NPROCURE,
+      enabled: false,
+    },
+    {
+      key: 'odisha_nic',
+      name: 'Odisha NIC eProc',
+      baseUrl: 'https://tendersodisha.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: true,
+    },
+    {
+      key: 'rajasthan_nic',
+      name: 'Rajasthan NIC eProc',
+      baseUrl: 'https://eproc.rajasthan.gov.in/nicgep/app',
+      type: SiteType.NIC_GEP,
+      enabled: true,
+    },
+    {
+      key: 'tn_nic',
+      name: 'Tamil Nadu NIC eProc',
+      baseUrl: 'https://tntenders.gov.in/nicgep/app',
       type: SiteType.NIC_GEP,
       enabled: false,
     },
@@ -57,20 +131,18 @@ async function main() {
       name: 'Uttar Pradesh NIC eProc',
       baseUrl: 'https://etender.up.nic.in/nicgep/app',
       type: SiteType.NIC_GEP,
-      enabled: false,
+      enabled: true,
     },
   ];
 
   for (const site of sites) {
     await prisma.sourceSite.upsert({
       where: { key: site.key },
-      // IMPORTANT: do NOT overwrite operational toggles in update
       update: {
         name: site.name,
         baseUrl: site.baseUrl,
         type: site.type,
       },
-      // only used first time
       create: site,
     });
 
