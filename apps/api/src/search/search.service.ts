@@ -54,6 +54,8 @@ export class SearchService {
         FROM tenders t
         LEFT JOIN tender_workflows w ON w.tender_id = t.id
         WHERE t.embedding IS NOT NULL
+          AND t.status != 'CLOSED'
+          AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
         ${filterClauses.sql}
         ORDER BY t.embedding <=> $1::vector
         LIMIT 200
@@ -69,6 +71,8 @@ export class SearchService {
           FROM tenders t
           LEFT JOIN tender_workflows w ON w.tender_id = t.id
           WHERE t.tsv @@ to_tsquery('english', $1)
+            AND t.status != 'CLOSED'
+            AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
           ${filterClauses.sql}
           ORDER BY fts_score DESC
           LIMIT 200
@@ -82,6 +86,8 @@ export class SearchService {
           FROM tenders t
           LEFT JOIN tender_workflows w ON w.tender_id = t.id
           WHERE t.search_text ILIKE $1
+            AND t.status != 'CLOSED'
+            AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
           ${filterClauses.sql}
           ORDER BY t.published_at DESC NULLS LAST
           LIMIT 200
@@ -148,6 +154,8 @@ export class SearchService {
           FROM tenders t
           LEFT JOIN tender_workflows w ON w.tender_id = t.id
           WHERE t.tsv @@ to_tsquery('english', $1)
+            AND t.status != 'CLOSED'
+            AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
           ${filterClauses.sql}
           ORDER BY semantic_score DESC
           LIMIT 200
@@ -166,6 +174,8 @@ export class SearchService {
           FROM tenders t
           LEFT JOIN tender_workflows w ON w.tender_id = t.id
           WHERE t.search_text ILIKE $1
+            AND t.status != 'CLOSED'
+            AND (t.deadline_at IS NULL OR t.deadline_at > NOW())
           ${filterClauses.sql}
           ORDER BY t.published_at DESC NULLS LAST
           LIMIT 200
@@ -283,7 +293,15 @@ export class SearchService {
   private async browseLatest(params: SearchParams) {
     const { sourceSiteIds, publishedFrom, publishedTo, closingSoonDays, location, sort, page, pageSize } = params;
 
-    const where: any = {};
+    const where: any = {
+      // Always exclude closed/expired tenders
+      status: { not: 'CLOSED' },
+      OR: [
+        { deadlineAt: null },
+        { deadlineAt: { gt: new Date() } },
+      ],
+    };
+
     if (sourceSiteIds) {
       where.sourceSiteId = { in: sourceSiteIds.split(',').map(s => s.trim()) };
     }
@@ -295,7 +313,9 @@ export class SearchService {
     if (closingSoonDays) {
       const future = new Date();
       future.setDate(future.getDate() + closingSoonDays);
+      // Override deadlineAt: must be upcoming AND within the window
       where.deadlineAt = { gte: new Date(), lte: future };
+      delete where.OR; // deadlineAt is now explicitly set; OR is superseded
     }
     if (location) {
       where.location = { contains: location, mode: 'insensitive' };
