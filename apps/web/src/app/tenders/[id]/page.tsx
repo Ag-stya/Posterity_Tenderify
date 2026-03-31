@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
   isAuthenticated, getUser,
@@ -28,6 +28,111 @@ const STAGE_LABELS: Record<string, { label: string; color: string }> = {
   REJECTED: { label: 'Rejected', color: '#ef4444' },
 };
 
+// ─── Custom Dropdown ──────────────────────────────────────────────────────────
+// Pure React + Tailwind divs — no native <select>.
+// Works identically on macOS, Windows, Linux across all browsers.
+
+interface DropdownOption {
+  value: string;
+  label: string;
+}
+
+interface CustomDropdownProps {
+  value: string;
+  onChange: (value: string) => void;
+  options: DropdownOption[];
+  placeholder?: string;
+  className?: string;
+  accentColor?: string;
+}
+
+function CustomDropdown({
+  value,
+  onChange,
+  options,
+  placeholder = 'Select...',
+  className = '',
+  accentColor = '#06b6d4',
+}: CustomDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
+
+  const selected = options.find(o => o.value === value);
+
+  return (
+    <div ref={ref} className={`relative ${className}`}>
+      {/* Trigger button */}
+      <button
+        type="button"
+        onClick={() => setOpen(prev => !prev)}
+        className="w-full flex items-center justify-between gap-2 bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-left transition focus:outline-none"
+        style={{ borderColor: open ? accentColor : undefined }}
+      >
+        <span className={selected ? 'text-white' : 'text-gray-500'}>
+          {selected ? selected.label : placeholder}
+        </span>
+        <svg
+          className="w-4 h-4 text-gray-500 flex-shrink-0 transition-transform duration-150"
+          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* Panel */}
+      {open && (
+        <div className="absolute z-50 mt-1 w-full min-w-max bg-gray-900 border border-white/10 rounded-lg shadow-2xl overflow-hidden">
+          <div className="max-h-56 overflow-y-auto py-1">
+            {/* Reset / placeholder row */}
+            <button
+              type="button"
+              onClick={() => { onChange(''); setOpen(false); }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:bg-white/5 transition flex items-center gap-2"
+            >
+              <span className="w-3 flex-shrink-0" />
+              {placeholder}
+            </button>
+            {options.map(opt => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+                className="w-full text-left px-3 py-2 text-sm text-white hover:bg-white/5 transition flex items-center gap-2"
+              >
+                <span className="w-3 flex-shrink-0">
+                  {opt.value === value && (
+                    <svg className="w-3 h-3" style={{ color: accentColor }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </span>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Stage Timeline ───────────────────────────────────────────────────────────
+
 function StageTimeline({ tenderId }: { tenderId: string }) {
   const [timeline, setTimeline] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -53,7 +158,6 @@ function StageTimeline({ tenderId }: { tenderId: string }) {
         const isRejection = event.actionType === 'TENDER_REJECTED';
         const stageInfo = STAGE_LABELS[event.toStage || event.stage] || { label: event.stage, color: '#666' };
         const color = isRejection ? '#ef4444' : stageInfo.color;
-
         let actionLabel = '';
         switch (event.actionType) {
           case 'WORKFLOW_ENTERED': actionLabel = 'Entered workflow'; break;
@@ -64,21 +168,16 @@ function StageTimeline({ tenderId }: { tenderId: string }) {
           case 'NOTE_ADDED': actionLabel = 'Added a note'; break;
           default: actionLabel = event.actionType.replace(/_/g, ' ').toLowerCase();
         }
-
         return (
           <div key={event.id} className="flex gap-3">
-            {/* Timeline line + dot */}
             <div className="flex flex-col items-center">
               <div className="w-3 h-3 rounded-full border-2 flex-shrink-0 mt-1" style={{ borderColor: color, background: isLast ? color : 'transparent' }} />
               {!isLast && <div className="w-0.5 flex-1 min-h-[32px]" style={{ background: `${color}30` }} />}
             </div>
-            {/* Content */}
-            <div className={`pb-4 ${isLast ? '' : ''}`}>
+            <div className="pb-4">
               <div className="text-sm text-white font-medium">{actionLabel}</div>
               {event.fromStage && event.toStage && event.actionType === 'STAGE_CHANGED' && (
-                <div className="text-xs text-gray-500">
-                  {STAGE_LABELS[event.fromStage]?.label || event.fromStage} → {STAGE_LABELS[event.toStage]?.label || event.toStage}
-                </div>
+                <div className="text-xs text-gray-500">{STAGE_LABELS[event.fromStage]?.label || event.fromStage} → {STAGE_LABELS[event.toStage]?.label || event.toStage}</div>
               )}
               {isRejection && event.metadata?.rejectionReason && (
                 <div className="text-xs text-red-400 mt-0.5">Reason: {event.metadata.rejectionReason}</div>
@@ -93,6 +192,8 @@ function StageTimeline({ tenderId }: { tenderId: string }) {
     </div>
   );
 }
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function TenderDetailPage() {
   const router = useRouter();
@@ -128,14 +229,12 @@ export default function TenderDetailPage() {
       } else {
         setWorkflow(null);
       }
-
       const [stagesRes, notesRes, actRes, usersRes] = await Promise.all([
         stageApi.getStages(tenderId).catch(() => null),
         notesApi.list(tenderId).catch(() => null),
         activityApi.tender(tenderId).catch(() => null),
         usersApi.list().catch(() => null),
       ]);
-
       if (stagesRes?.ok) setStages(await stagesRes.json());
       if (notesRes?.ok) { const d = await notesRes.json(); setNotes(d.items || []); }
       if (actRes?.ok) { const d = await actRes.json(); setActivity(d.items || []); }
@@ -213,6 +312,10 @@ export default function TenderDetailPage() {
   const isRejected = workflow?.isRejected;
   const currentInfo = STAGE_LABELS[currentStage] || { label: currentStage, color: '#666' };
 
+  const moveStageOptions = STAGES.filter(s => s !== currentStage).map(s => ({ value: s, label: STAGE_LABELS[s].label }));
+  const allStageOptions = STAGES.map(s => ({ value: s, label: STAGE_LABELS[s].label }));
+  const userOptions = allUsers.filter((u: any) => u.isActive).map((u: any) => ({ value: u.id, label: u.profile?.fullName || u.email }));
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       <Sidebar />
@@ -258,7 +361,6 @@ export default function TenderDetailPage() {
             )}
           </div>
 
-          {/* Stage Progress Bar */}
           {workflow && !isRejected && (
             <div className="mt-6 flex items-center gap-1">
               {STAGES.map((stage, i) => {
@@ -273,7 +375,6 @@ export default function TenderDetailPage() {
             </div>
           )}
 
-          {/* Rejection Banner */}
           {isRejected && (
             <div className="mt-4 p-4 rounded-xl bg-red-500/10 border border-red-500/20">
               <div className="text-sm text-red-400"><strong>Reason:</strong> {workflow.rejectionReason}</div>
@@ -290,42 +391,62 @@ export default function TenderDetailPage() {
         {/* Actions Panel */}
         {workflow && !isRejected && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+
+            {/* Move Stage */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Move Stage</h3>
               <div className="flex gap-2">
-                <select value={selectedStage} onChange={(e) => setSelectedStage(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
-                  <option value="">Select stage...</option>
-                  {STAGES.filter(s => s !== currentStage).map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
-                </select>
+                <CustomDropdown
+                  value={selectedStage}
+                  onChange={setSelectedStage}
+                  options={moveStageOptions}
+                  placeholder="Select stage..."
+                  className="flex-1"
+                  accentColor="#06b6d4"
+                />
                 <button onClick={moveStage} disabled={!selectedStage || actionLoading} className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">Move</button>
               </div>
             </div>
+
+            {/* Assign Stage */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Assign Stage</h3>
               <div className="space-y-2">
-                <select value={assignStage} onChange={(e) => setAssignStage(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
-                  <option value="">Select stage...</option>
-                  {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
-                </select>
+                <CustomDropdown
+                  value={assignStage}
+                  onChange={setAssignStage}
+                  options={allStageOptions}
+                  placeholder="Select stage..."
+                  accentColor="#06b6d4"
+                />
                 <div className="flex gap-2">
-                  <select value={assignUserId} onChange={(e) => setAssignUserId(e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500 focus:outline-none">
-                    <option value="">Select user...</option>
-                    {allUsers.filter((u: any) => u.isActive).map((u: any) => <option key={u.id} value={u.id}>{u.profile?.fullName || u.email}</option>)}
-                  </select>
+                  <CustomDropdown
+                    value={assignUserId}
+                    onChange={setAssignUserId}
+                    options={userOptions}
+                    placeholder="Select user..."
+                    className="flex-1"
+                    accentColor="#06b6d4"
+                  />
                   <button onClick={handleAssignStage} disabled={!assignStage || !assignUserId || actionLoading} className="px-4 py-2 bg-cyan-500/20 text-cyan-400 rounded-lg text-sm font-medium hover:bg-cyan-500/30 disabled:opacity-50 transition">Assign</button>
                 </div>
               </div>
             </div>
+
+            {/* Reject Tender */}
             <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-5">
               <h3 className="text-sm font-semibold text-gray-400 mb-3">Reject Tender</h3>
               {!showReject ? (
                 <button onClick={() => setShowReject(true)} className="px-4 py-2 bg-red-500/20 text-red-400 rounded-lg text-sm font-medium hover:bg-red-500/30 transition">Reject...</button>
               ) : (
                 <div className="space-y-2">
-                  <select value={rejectStage} onChange={(e) => setRejectStage(e.target.value)} className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none">
-                    <option value="">Failed at stage...</option>
-                    {STAGES.map(s => <option key={s} value={s}>{STAGE_LABELS[s].label}</option>)}
-                  </select>
+                  <CustomDropdown
+                    value={rejectStage}
+                    onChange={setRejectStage}
+                    options={allStageOptions}
+                    placeholder="Failed at stage..."
+                    accentColor="#ef4444"
+                  />
                   <textarea value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejection reason..." className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-red-500 focus:outline-none resize-none h-16" />
                   <div className="flex gap-2">
                     <button onClick={rejectTender} disabled={!rejectReason || !rejectStage || actionLoading} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 disabled:opacity-50 transition">Confirm Reject</button>
@@ -334,12 +455,13 @@ export default function TenderDetailPage() {
                 </div>
               )}
             </div>
+
           </div>
         )}
 
-        {/* ── Stage Timeline + Assignments + Notes + Activity ── */}
+        {/* Stage Timeline + Assignments + Notes + Activity */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-          {/* Visual Stage Timeline (NEW) */}
+
           <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
             <h3 className="text-white font-semibold mb-4 flex items-center gap-2">
               <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 17h8m0 0V9m0 8l-8-8-4 4-6-6" /></svg>
@@ -348,7 +470,6 @@ export default function TenderDetailPage() {
             {workflow ? <StageTimeline tenderId={tenderId} /> : <p className="text-gray-500 text-sm">Enter workflow to see timeline</p>}
           </div>
 
-          {/* Stage Assignments */}
           <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
             <h3 className="text-white font-semibold mb-4">Assignments</h3>
             <div className="space-y-2 max-h-[400px] overflow-y-auto">
@@ -366,13 +487,10 @@ export default function TenderDetailPage() {
                   </div>
                 );
               })}
-              {(Array.isArray(stages) ? stages : []).length === 0 && (
-                <div className="text-center py-4"><p className="text-gray-500 text-sm">No assignments yet</p></div>
-              )}
+              {(Array.isArray(stages) ? stages : []).length === 0 && <div className="text-center py-4"><p className="text-gray-500 text-sm">No assignments yet</p></div>}
             </div>
           </div>
 
-          {/* Notes */}
           <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
             <h3 className="text-white font-semibold mb-4">Notes</h3>
             <div className="space-y-3 max-h-[300px] overflow-y-auto mb-4">
@@ -390,7 +508,6 @@ export default function TenderDetailPage() {
             </div>
           </div>
 
-          {/* Activity Log */}
           <div className="bg-gray-900/60 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
             <h3 className="text-white font-semibold mb-4">Activity Log</h3>
             <div className="space-y-3 max-h-[400px] overflow-y-auto">
@@ -408,6 +525,7 @@ export default function TenderDetailPage() {
               {activity.length === 0 && <p className="text-gray-500 text-sm">No activity yet</p>}
             </div>
           </div>
+
         </div>
       </main>
     </div>
