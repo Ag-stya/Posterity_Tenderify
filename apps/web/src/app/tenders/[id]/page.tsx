@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter, useParams } from 'next/navigation';
 import {
   isAuthenticated, getUser,
@@ -29,8 +30,8 @@ const STAGE_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 // ─── Custom Dropdown ──────────────────────────────────────────────────────────
-// Pure React + Tailwind divs — no native <select>.
-// Works identically on macOS, Windows, Linux across all browsers.
+// Uses createPortal to render the panel at document.body level, so it is never
+// clipped by any parent overflow:hidden / z-index stacking context.
 
 interface DropdownOption {
   value: string;
@@ -55,28 +56,118 @@ function CustomDropdown({
   accentColor = '#06b6d4',
 }: CustomDropdownProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties>({});
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
+  // Position the portal panel under the trigger on open
   useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const panelHeight = Math.min(224, options.length * 36 + 40); // approx
+
+    if (spaceBelow >= panelHeight || spaceBelow >= 120) {
+      // open downward
+      setPanelStyle({
+        position: 'fixed',
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999,
+      });
+    } else {
+      // open upward
+      setPanelStyle({
+        position: 'fixed',
+        bottom: window.innerHeight - rect.top + 4,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999,
+      });
+    }
+  }, [open, options.length]);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target as Node) &&
+        panelRef.current && !panelRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open]);
 
+  // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, []);
 
+  // Reposition on scroll/resize
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => {
+      if (!triggerRef.current) return;
+      const rect = triggerRef.current.getBoundingClientRect();
+      setPanelStyle(prev => ({ ...prev, top: rect.bottom + 4, left: rect.left, width: rect.width }));
+    };
+    window.addEventListener('scroll', reposition, true);
+    window.addEventListener('resize', reposition);
+    return () => {
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('resize', reposition);
+    };
+  }, [open]);
+
   const selected = options.find(o => o.value === value);
 
+  const panel = open ? (
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      className="bg-gray-900 border border-white/10 rounded-lg shadow-2xl overflow-hidden"
+    >
+      <div className="max-h-56 overflow-y-auto py-1">
+        <button
+          type="button"
+          onClick={() => { onChange(''); setOpen(false); }}
+          className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:bg-white/5 transition flex items-center gap-2"
+        >
+          <span className="w-3 flex-shrink-0" />
+          {placeholder}
+        </button>
+        {options.map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => { onChange(opt.value); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm text-white hover:bg-white/5 transition flex items-center gap-2"
+          >
+            <span className="w-3 flex-shrink-0">
+              {opt.value === value && (
+                <svg className="w-3 h-3" style={{ color: accentColor }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+            </span>
+            {opt.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div ref={ref} className={`relative ${className}`}>
-      {/* Trigger button */}
+    <div className={`relative ${className}`}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setOpen(prev => !prev)}
         className="w-full flex items-center justify-between gap-2 bg-gray-900 border border-white/10 rounded-lg px-3 py-2 text-sm text-left transition focus:outline-none"
@@ -94,39 +185,9 @@ function CustomDropdown({
         </svg>
       </button>
 
-      {/* Panel */}
-      {open && (
-        <div className="absolute z-50 mt-1 w-full min-w-max bg-gray-900 border border-white/10 rounded-lg shadow-2xl overflow-hidden">
-          <div className="max-h-56 overflow-y-auto py-1">
-            {/* Reset / placeholder row */}
-            <button
-              type="button"
-              onClick={() => { onChange(''); setOpen(false); }}
-              className="w-full text-left px-3 py-2 text-sm text-gray-500 hover:bg-white/5 transition flex items-center gap-2"
-            >
-              <span className="w-3 flex-shrink-0" />
-              {placeholder}
-            </button>
-            {options.map(opt => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => { onChange(opt.value); setOpen(false); }}
-                className="w-full text-left px-3 py-2 text-sm text-white hover:bg-white/5 transition flex items-center gap-2"
-              >
-                <span className="w-3 flex-shrink-0">
-                  {opt.value === value && (
-                    <svg className="w-3 h-3" style={{ color: accentColor }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                  )}
-                </span>
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      {typeof document !== 'undefined' && panel
+        ? createPortal(panel, document.body)
+        : null}
     </div>
   );
 }
