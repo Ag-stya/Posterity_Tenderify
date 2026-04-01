@@ -111,7 +111,7 @@ export class SchedulerService implements OnModuleInit, OnModuleDestroy {
             `crawl:${site.key}`,
             { sourceSiteId: site.id },
             {
-              jobId: `crawl-${site.id}`,
+              jobId: `crawl-${site.id}-${Date.now()}`,
               removeOnComplete: 100,
               removeOnFail: 50,
               attempts: 2,
